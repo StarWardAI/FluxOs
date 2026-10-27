@@ -6,7 +6,6 @@ import { REASONING_EFFORTS, type ReasoningEffort } from '@fluxos/contracts/agent
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
-  MODEL_PRESETS,
   getConfigDir,
   type ModelCapabilities,
   type ModelMetadataSource,
@@ -14,7 +13,7 @@ import {
   type FluxAgentConfig,
 } from './config'
 import { writeFileAtomicSync } from '@fluxos/platform/fileIO'
-import { getModelReasoningCapabilities, getSupportedModelSpec, normalizeNativeReasoningConfig } from './modelRegistry'
+import { normalizeNativeReasoningConfig } from './modelRegistry'
 import { normalizeBaseUrl } from './normalizeBaseUrl'
 import { createFluxAgentRequestHeaders } from './clientIdentity'
 
@@ -495,33 +494,8 @@ function findModelsDevMetadata(registry: JsonRecord | undefined, id: string, con
   return best?.metadata
 }
 
-function builtinMetadata(id: string): { preset: ModelPreset; metadata: ParsedModelMetadata } | undefined {
-  const spec = getSupportedModelSpec(id)
-  const preset = MODEL_PRESETS.find(item => item.model === spec?.id)
-  if (!spec || !preset) return undefined
-  const reasoning = getModelReasoningCapabilities(spec.id, spec.provider)
-  return {
-    preset,
-    metadata: {
-      contextWindow: spec.contextWindow,
-      maxOutputTokens: spec.maxOutputTokens,
-      capabilities: {
-        vision: spec.supportsVision,
-        reasoning: Boolean(reasoning),
-        reasoningEfforts: reasoning?.efforts,
-      },
-      hasMetadata: true,
-    },
-  }
-}
-
 function fallbackPresets(config: FluxAgentConfig): ModelPreset[] {
-  const providerModels = config.provider === 'custom'
-    ? MODEL_PRESETS
-    : MODEL_PRESETS.filter(preset => preset.provider === config.provider || config.provider === 'openrouter')
-  const models = providerModels.map(preset => ({ ...preset, availability: 'builtin' as const }))
-  if (!config.model || models.some(model => model.model.toLowerCase() === config.model.toLowerCase())) return models
-  return [configuredPreset(config), ...models]
+  return config.model ? [configuredPreset(config)] : []
 }
 
 function configuredPreset(config: FluxAgentConfig): ModelPreset {
@@ -563,10 +537,8 @@ function buildPreset(
   const id = modelId(row)
   if (!id) return undefined
   const apiMetadata = extractModelMetadata(row)
-  const builtin = builtinMetadata(id)
   let metadata = mergeMetadata(apiMetadata, gatewayMetadata)
   metadata = mergeMetadata(metadata, registryMetadata)
-  metadata = mergeMetadata(metadata, builtin?.metadata)
   if (!isAgentCandidate(id, metadata)) return undefined
 
   const contextWindow = metadata.contextWindow ?? DEFAULT_CONTEXT_WINDOW
@@ -576,16 +548,14 @@ function buildPreset(
     'api',
     gatewayMetadata?.hasMetadata ? 'gateway' : undefined,
     registryMetadata?.hasMetadata ? 'models.dev' : undefined,
-    builtin ? 'builtin' : undefined,
     metadata.contextWindow ? undefined : 'default',
   )
   const description = cleanText(row.description, 500)
-    || builtin?.preset.description
     || `Available from ${endpointLabel(config.baseUrl)}.`
 
   return {
     id,
-    name: modelName(row, builtin?.preset.name ?? id),
+    name: modelName(row, id),
     model: id,
     provider: config.provider,
     baseUrl: config.baseUrl,

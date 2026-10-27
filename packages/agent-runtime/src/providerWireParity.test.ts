@@ -22,7 +22,8 @@ describe('provider wire parity frozen before adapter extraction', () => {
     const state = new DefaultAgentStateProvider({ provider, apiKey: 'fixture-key', baseUrl: 'http://fixture.invalid/v1', model }, '/fixture/workspace')
     const config: APIConfig = { ...state.getActiveConfig()!, reasoning: { enabled: true, effort: 'high' },
       maxTokens: 4096, maxOutputTokens: 8192, customHeaders: { 'x-fixture': 'value' },
-      modelCapabilities: { ...state.getActiveConfig()?.modelCapabilities, responsesCustomTools: custom } }
+      modelCapabilities: { ...state.getActiveConfig()?.modelCapabilities, responsesCustomTools: custom,
+        reasoning: true, reasoningEfforts: ['low', 'high'] } }
     let request: unknown
     const streamMessage = vi.fn(async (url: string, headers: Record<string, string>, body: string, line: (value: string) => void) => {
       expect(headers['x-client-request-id']).toMatch(/^[0-9a-f-]{36}$/)

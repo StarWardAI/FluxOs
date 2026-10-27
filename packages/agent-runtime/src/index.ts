@@ -24,7 +24,6 @@ export {
   ensureDirectories,
   getConfigDir,
   getConversationsDir,
-  getPresetByIdOrModel,
   getPresetByIdOrModelFrom,
   loadConfig,
   saveConfig,

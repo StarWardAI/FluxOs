@@ -3034,6 +3034,7 @@ describe('AgentEngine model protocol compatibility', () => {
     provider: 'custom' | 'anthropic',
     model: string,
     streamMessage: ToolExecutor['streamMessage'],
+    capabilities?: Record<string, unknown>,
   ) {
     const workspace = process.cwd()
     const stateProvider = new DefaultAgentStateProvider({
@@ -3043,7 +3044,10 @@ describe('AgentEngine model protocol compatibility', () => {
       model,
       contextWindow: 100_000,
       maxTokens: 4096,
-      modelCapabilities: model.startsWith('gpt-5') ? { supportedEndpoints: ['/responses'] } : undefined,
+      modelCapabilities: {
+        ...(model.startsWith('gpt-5') ? { supportedEndpoints: ['/responses'] } : {}),
+        ...capabilities,
+      },
     }, workspace)
     const executor = {
       streamMessage: vi.fn(streamMessage),
@@ -3578,7 +3582,7 @@ describe('AgentEngine model protocol compatibility', () => {
         },
       })}`)
       return { success: true, data: '' }
-    })
+    }, { reasoning: true, reasoningEfforts: ['low', 'medium', 'high'] })
 
     try {
       const turn = await harness.callModel()

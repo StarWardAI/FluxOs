@@ -31,10 +31,10 @@ export interface ModelPreset {
   description: string
   capabilities?: ModelCapabilities
   metadataSources?: ModelMetadataSource[]
-  availability?: 'api' | 'configured' | 'builtin'
+  availability?: 'api' | 'configured'
 }
 
-export type ModelMetadataSource = 'api' | 'gateway' | 'models.dev' | 'builtin' | 'default'
+export type ModelMetadataSource = 'api' | 'gateway' | 'models.dev' | 'default'
 
 export interface ModelCapabilities {
   tools?: boolean
@@ -72,13 +72,4 @@ export interface FluxAgentApiConfigProfile {
   reasoning?: NativeReasoningConfig
   createdAt: number
   updatedAt: number
-}
-
-export interface ProviderPreset {
-  id: string
-  name: string
-  provider: FluxAgentProvider
-  baseUrl: string
-  defaultModel: string
-  description: string
 }

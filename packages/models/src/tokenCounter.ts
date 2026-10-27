@@ -1,8 +1,7 @@
 import { getEncoding, type Tiktoken, type TiktokenEncoding } from 'js-tiktoken'
-import { resolveTokenizerForModel } from './modelRegistry'
 import { createFluxAgentRequestHeaders } from './clientIdentity'
 
-export type TokenCountSource = 'provider' | 'tokenizer' | 'estimate' | 'unavailable'
+export type TokenCountSource = 'provider' | 'tokenizer' | 'unavailable'
 
 export interface TokenCountResult {
   tokens: number
@@ -14,15 +13,12 @@ export interface TokenCountResult {
 interface CountOptions {
   provider?: string
   model?: string
-  allowEstimate?: boolean
 }
 
+// No model-name knowledge in the kernel: one generic encoding counts every
+// model; exact counts come from provider usage.
+const TOKENIZER_ENCODING: TiktokenEncoding = 'o200k_base'
 const encoderCache = new Map<TiktokenEncoding, Tiktoken>()
-
-function resolveEncodingName(options: CountOptions): TiktokenEncoding | null {
-  void options.provider
-  return resolveTokenizerForModel(options.model) ?? null
-}
 
 function getEncoder(name: TiktokenEncoding): Tiktoken {
   const cached = encoderCache.get(name)
@@ -32,36 +28,12 @@ function getEncoder(name: TiktokenEncoding): Tiktoken {
   return encoder
 }
 
-export function roughTokenCountEstimation(text: string, bytesPerToken = 4): number {
-  return Math.max(0, Math.round((text || '').length / bytesPerToken))
-}
-
-function estimatedCount(text: string, options: CountOptions): TokenCountResult {
-  return {
-    tokens: roughTokenCountEstimation(text),
-    source: 'estimate',
-    reason: `Rough token estimate for model "${options.model || 'unknown'}" (${options.provider || 'unknown provider'}): characters / 4`,
-  }
-}
-
 export function countTextTokens(text: string, options: CountOptions = {}): TokenCountResult {
-  const encodingName = resolveEncodingName(options)
-  if (!encodingName) {
-    if (options.allowEstimate !== false) {
-      return estimatedCount(text || '', options)
-    }
-    return {
-      tokens: 0,
-      source: 'unavailable',
-      reason: `No tokenizer mapping for model "${options.model || 'unknown'}" (${options.provider || 'unknown provider'})`,
-    }
-  }
-
-  const encoder = getEncoder(encodingName)
+  void options
   return {
-    tokens: encoder.encode(text || '').length,
+    tokens: getEncoder(TOKENIZER_ENCODING).encode(text || '').length,
     source: 'tokenizer',
-    tokenizer: encodingName,
+    tokenizer: TOKENIZER_ENCODING,
   }
 }
 
@@ -72,18 +44,12 @@ export function countValueTokens(value: unknown, options: CountOptions = {}): To
 
 export function countMessagesTokens(messages: Array<Record<string, unknown>>, options: CountOptions = {}): TokenCountResult {
   let total = 0
-  let tokenizer: string | undefined
-  let usedEstimate = false
   for (const message of messages) {
     const count = countValueTokens(message, options)
     if (count.source === 'unavailable') return count
     total += count.tokens + 4
-    tokenizer = count.tokenizer
-    if (count.source === 'estimate') usedEstimate = true
   }
-  return usedEstimate
-    ? { tokens: total, source: 'estimate', reason: `Rough message token estimate for model "${options.model || 'unknown'}" (${options.provider || 'unknown provider'})` }
-    : { tokens: total, source: 'tokenizer', tokenizer }
+  return { tokens: total, source: 'tokenizer', tokenizer: TOKENIZER_ENCODING }
 }
 
 export function countTurnishTokens(value: unknown, options: CountOptions = {}): TokenCountResult {

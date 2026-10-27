@@ -2,8 +2,8 @@
 
 exports[`provider wire parity frozen before adapter extraction > anthropic_messages / anthropic / claude-3-7-sonnet / custom=false 1`] = `
 {
-  "reasoningEffort": undefined,
-  "reasoningEnabled": undefined,
+  "reasoningEffort": "high",
+  "reasoningEnabled": true,
   "request": {
     "body": {
       "max_tokens": 4096,
@@ -32,7 +32,6 @@ exports[`provider wire parity frozen before adapter extraction > anthropic_messa
           "type": "text",
         },
       ],
-      "temperature": 0.2,
       "tool_choice": {
         "type": "auto",
       },
@@ -203,9 +202,6 @@ exports[`provider wire parity frozen before adapter extraction > anthropic_messa
         },
       ],
       "model": "claude-sonnet-4-6",
-      "output_config": {
-        "effort": "high",
-      },
       "stream": true,
       "system": [
         {
@@ -216,9 +212,6 @@ exports[`provider wire parity frozen before adapter extraction > anthropic_messa
           "type": "text",
         },
       ],
-      "thinking": {
-        "type": "adaptive",
-      },
       "tool_choice": {
         "type": "auto",
       },
@@ -391,9 +384,6 @@ exports[`provider wire parity frozen before adapter extraction > openai_chat / d
       "stream_options": {
         "include_usage": true,
       },
-      "thinking": {
-        "type": "enabled",
-      },
       "tools": [
         {
           "function": {
@@ -548,7 +538,7 @@ exports[`provider wire parity frozen before adapter extraction > openai_chat / d
 
 exports[`provider wire parity frozen before adapter extraction > openai_chat / kimi / kimi-k2.5 / custom=false 1`] = `
 {
-  "reasoningEffort": undefined,
+  "reasoningEffort": "high",
   "reasoningEnabled": true,
   "request": {
     "body": {
@@ -566,12 +556,10 @@ exports[`provider wire parity frozen before adapter extraction > openai_chat / k
       "model": "kimi-k2.5",
       "parallel_tool_calls": true,
       "prompt_cache_key": "tf:kimi-k2.5:vibe:7c3b7h:17cnr69",
+      "reasoning_effort": "high",
       "stream": true,
       "stream_options": {
         "include_usage": true,
-      },
-      "thinking": {
-        "type": "enabled",
       },
       "tool_choice": "auto",
       "tools": [
@@ -961,8 +949,8 @@ exports[`provider wire parity frozen before adapter extraction > openai_chat / o
 
 exports[`provider wire parity frozen before adapter extraction > openai_chat / openrouter / fixture-model / custom=false 1`] = `
 {
-  "reasoningEffort": undefined,
-  "reasoningEnabled": undefined,
+  "reasoningEffort": "high",
+  "reasoningEnabled": true,
   "request": {
     "body": {
       "max_tokens": 4096,
@@ -994,11 +982,11 @@ exports[`provider wire parity frozen before adapter extraction > openai_chat / o
       ],
       "model": "fixture-model",
       "parallel_tool_calls": true,
+      "reasoning_effort": "high",
       "stream": true,
       "stream_options": {
         "include_usage": true,
       },
-      "temperature": 0.2,
       "tool_choice": "auto",
       "tools": [
         {

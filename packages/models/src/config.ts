@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
-import { getSupportedModelSpec, normalizeNativeReasoningConfig, SUPPORTED_MODEL_SPECS } from './modelRegistry'
+import { normalizeNativeReasoningConfig } from './modelRegistry'
 import {
   normalizeApprovalPolicy,
   normalizeCapabilityProfile,
@@ -16,8 +16,8 @@ import {
 import { readModelConfiguration, writeModelConfiguration, recoverModelConfiguration } from '@fluxos/platform/modelConfigurationStorage'
 import { getActiveProfilePaths } from '@fluxos/platform/profilePaths'
 
-import type { FluxAgentConfig, ModelPreset, ModelMetadataSource, ModelCapabilities, FluxAgentProvider, FluxAgentConfigKey, FluxAgentApiConfigProfile, ProviderPreset } from '@fluxos/contracts/modelConfigTypes'
-export type { FluxAgentConfig, ModelPreset, ModelMetadataSource, ModelCapabilities, FluxAgentProvider, FluxAgentConfigKey, FluxAgentApiConfigProfile, ProviderPreset } from '@fluxos/contracts/modelConfigTypes'
+import type { FluxAgentConfig, ModelPreset, ModelMetadataSource, ModelCapabilities, FluxAgentProvider, FluxAgentConfigKey, FluxAgentApiConfigProfile } from '@fluxos/contracts/modelConfigTypes'
+export type { FluxAgentConfig, ModelPreset, ModelMetadataSource, ModelCapabilities, FluxAgentProvider, FluxAgentConfigKey, FluxAgentApiConfigProfile } from '@fluxos/contracts/modelConfigTypes'
 
 function configDirectory(): string {
   return getActiveProfilePaths().configRoot
@@ -47,96 +47,6 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000
 export const DEFAULT_MAX_TOKENS = 16_384
 export const FLUXAGENT_PROVIDERS: FluxAgentProvider[] = ['openai', 'anthropic', 'deepseek', 'kimi', 'glm', 'openrouter', 'custom']
 
-export const PROVIDER_PRESETS: ProviderPreset[] = [
-  {
-    id: 'custom',
-    name: 'Custom OpenAI-compatible',
-    provider: 'custom',
-    baseUrl: '',
-    defaultModel: '',
-    description: 'Custom OpenAI-compatible API endpoint.',
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    provider: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-5.6',
-    description: 'Official OpenAI-compatible API.',
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    provider: 'anthropic',
-    baseUrl: 'https://api.anthropic.com/v1',
-    defaultModel: 'claude-opus-4-8',
-    description: 'Official Anthropic Messages API.',
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    provider: 'openrouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'gpt-5.5',
-    description: 'OpenAI-compatible model router.',
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    provider: 'deepseek',
-    baseUrl: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-v4-flash',
-    description: 'OpenAI-compatible DeepSeek API.',
-  },
-  {
-    id: 'kimi',
-    name: 'Kimi',
-    provider: 'kimi',
-    baseUrl: 'https://api.moonshot.cn/v1',
-    defaultModel: 'kimi-k3',
-    description: 'Moonshot Kimi OpenAI-compatible API.',
-  },
-  {
-    id: 'glm',
-    name: 'GLM',
-    provider: 'glm',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: 'glm-5.2',
-    description: 'Zhipu GLM OpenAI-compatible API.',
-  },
-]
-
-export function getProviderPreset(idOrProvider: string): ProviderPreset | undefined {
-  const key = idOrProvider.trim().toLowerCase()
-  return PROVIDER_PRESETS.find(p => p.id === key)
-    ?? PROVIDER_PRESETS.find(p => p.provider === key && p.id !== 'custom')
-    ?? PROVIDER_PRESETS.find(p => p.provider === key)
-}
-
-export function baseUrlForProvider(provider: FluxAgentProvider): string {
-  return PROVIDER_PRESETS.find(p => p.provider === provider && p.id !== 'custom')?.baseUrl
-    ?? ''
-}
-
-export const MODEL_PRESETS: ModelPreset[] = SUPPORTED_MODEL_SPECS.map(spec => ({
-  id: spec.id,
-  name: spec.name,
-  model: spec.id,
-  provider: providerForModel(spec.id),
-  baseUrl: baseUrlForProvider(providerForModel(spec.id)),
-  contextWindow: spec.contextWindow,
-  maxTokens: spec.defaultRequestTokens,
-  maxOutputTokens: spec.maxOutputTokens,
-  reasoning: normalizeNativeReasoningConfig(spec.id, undefined, spec.provider),
-  description: spec.description,
-  capabilities: {
-    vision: spec.supportsVision,
-    reasoning: Boolean(normalizeNativeReasoningConfig(spec.id, undefined, spec.provider)),
-  },
-  metadataSources: ['builtin'],
-  availability: 'builtin',
-}))
-
 const DEFAULT_CONFIG: FluxAgentConfig = {
   provider: 'custom',
   apiKey: '',
@@ -150,12 +60,6 @@ const DEFAULT_CONFIG: FluxAgentConfig = {
   reasoning: undefined,
   apiConfigs: [],
   activeApiConfigId: undefined,
-}
-
-export function providerForModel(model: string, fallback: FluxAgentProvider = 'custom'): FluxAgentProvider {
-  const provider = getSupportedModelSpec(model)?.provider
-  if (!provider) return fallback
-  return provider === 'deepseek' ? 'deepseek' : provider
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
@@ -293,10 +197,7 @@ export function createEmptyConfig(): FluxAgentConfig {
 }
 
 function defaultApiConfigName(provider: FluxAgentProvider, model: string, id: string): string {
-  const presetName = PROVIDER_PRESETS.find(preset => preset.provider === provider && preset.id !== 'custom')?.name
-    || PROVIDER_PRESETS.find(preset => preset.provider === provider)?.name
-    || provider
-  return model ? `${presetName} / ${model}` : id
+  return model ? `${provider} / ${model}` : id
 }
 
 function upsertApiConfigProfile(profiles: FluxAgentApiConfigProfile[] | undefined, profile: FluxAgentApiConfigProfile): FluxAgentApiConfigProfile[] {
@@ -487,15 +388,6 @@ export function setConfigValue(config: FluxAgentConfig, key: string, value: stri
   }
 }
 
-function applyKnownModelMetadata(config: FluxAgentConfig, presets: ModelPreset[]): FluxAgentConfig {
-  const spec = getSupportedModelSpec(config.model)
-  return spec ? {
-    ...config,
-    model: spec.id,
-    reasoning: normalizeNativeReasoningConfig(spec.id, config.reasoning, spec.provider),
-  } : config
-}
-
 export function ensureDirectories(workspacePath?: string): void {
   const dirs = [configDirectory(), getActiveProfilePaths().conversationsRoot]
   if (workspacePath) {
@@ -530,7 +422,7 @@ export async function loadConfig(): Promise<FluxAgentConfig> {
   return withFileLockSync(configLockFile(), () => {
     recoverModelConfiguration(configDirectory())
     if (!existsSync(configFile())) {
-      const initial = applyKnownModelMetadata(normalizeConfig(DEFAULT_CONFIG), MODEL_PRESETS)
+      const initial = normalizeConfig(DEFAULT_CONFIG)
       writeConfigDocument(initial)
       return normalizeConfig(applyApiKeyOverride(initial))
     }
@@ -543,18 +435,13 @@ export async function loadConfig(): Promise<FluxAgentConfig> {
     } catch (error) {
       const backupPath = quarantineCorruptFileSync(configFile())
       console.warn(`FluxOs preserved an invalid configuration file at ${backupPath}: ${error instanceof Error ? error.message : String(error)}`)
-      const recovered = applyKnownModelMetadata(normalizeConfig({ ...DEFAULT_CONFIG, ...readModelConfiguration(configDirectory()) }), MODEL_PRESETS)
+      const recovered = normalizeConfig({ ...DEFAULT_CONFIG, ...readModelConfiguration(configDirectory()) })
       writeConfigDocument(recovered)
       return normalizeConfig(applyApiKeyOverride(recovered))
     }
 
-    userConfig = readModelConfiguration(configDirectory()) as Partial<FluxAgentConfig>
-    const merged = normalizeConfig({ ...DEFAULT_CONFIG, ...userConfig })
-    const withBackendMetadata = applyKnownModelMetadata(merged, MODEL_PRESETS)
-    if (withBackendMetadata.contextWindow !== merged.contextWindow || withBackendMetadata.maxTokens !== merged.maxTokens || withBackendMetadata.model !== merged.model) {
-      return normalizeConfig(applyApiKeyOverride(persistConfig(withBackendMetadata)))
-    }
-    return normalizeConfig(applyApiKeyOverride(syncActiveProfile(withBackendMetadata, false)))
+    const merged = normalizeConfig({ ...DEFAULT_CONFIG, ...readModelConfiguration(configDirectory()) as Partial<FluxAgentConfig> })
+    return normalizeConfig(applyApiKeyOverride(syncActiveProfile(merged, false)))
   })
 }
 
@@ -585,15 +472,8 @@ export function getConversationsDir(): string {
   return getActiveProfilePaths().conversationsRoot
 }
 
-export function getPresetByIdOrModel(idOrModel: string): ModelPreset | undefined {
-  const spec = getSupportedModelSpec(idOrModel)
-  return MODEL_PRESETS.find(p => p.id === (spec?.id ?? idOrModel) || p.model === (spec?.id ?? idOrModel))
-}
-
 export function getPresetByIdOrModelFrom(presets: ModelPreset[], idOrModel: string): ModelPreset | undefined {
-  const spec = getSupportedModelSpec(idOrModel)
-  const canonical = spec?.id ?? idOrModel
-  return presets.find(p => p.id === canonical || p.model === canonical)
+  return presets.find(p => p.id === idOrModel || p.model === idOrModel)
 }
 
 export function applyPreset(config: FluxAgentConfig, preset: ModelPreset): FluxAgentConfig {
@@ -608,31 +488,6 @@ export function applyPreset(config: FluxAgentConfig, preset: ModelPreset): FluxA
     modelCapabilities: preset.capabilities,
     modelMetadataSources: preset.metadataSources,
     reasoning: normalizeNativeReasoningConfig(preset.model, preset.reasoning ?? config.reasoning, preset.provider, preset.capabilities),
-  })
-}
-
-export function configFromProviderPreset(preset: ProviderPreset, apiKey: string, model?: string, baseUrl?: string): FluxAgentConfig {
-  const selectedModel = model?.trim() || preset.defaultModel
-  const spec = getSupportedModelSpec(selectedModel)
-  const selectedApiKey = apiKey || ''
-  return syncActiveProfile({
-    provider: preset.provider,
-    apiKey: selectedApiKey,
-    baseUrl: (baseUrl?.trim() || preset.baseUrl).replace(/\/+$/, ''),
-    model: spec?.id ?? selectedModel,
-    contextWindow: spec?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-    maxTokens: spec?.defaultRequestTokens ?? DEFAULT_MAX_TOKENS,
-    maxOutputTokens: spec?.maxOutputTokens,
-    modelCapabilities: spec ? {
-      vision: spec.supportsVision,
-      reasoning: Boolean(normalizeNativeReasoningConfig(spec.id, undefined, preset.provider)),
-    } : undefined,
-    modelMetadataSources: spec ? ['builtin'] : ['default'],
-    approvalPolicy: 'ask',
-    gitEnabled: true,
-    reasoning: normalizeNativeReasoningConfig(spec?.id ?? selectedModel, undefined, preset.provider),
-    apiConfigs: [],
-    activeApiConfigId: 'main',
   })
 }
 
