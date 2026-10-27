@@ -35,7 +35,7 @@ function setup(options?: { policy?: Partial<MemoryPolicy> }) {
     read: request => hits.find(h => h.conversationId === request.conversationId && h.messageId === request.messageId && h.offset === request.offset),
     pending: checkpoints => hits.filter(h => checkpoints[h.id] !== h.digest),
   }
-  const store = new ContinuumStore(join(root, 'memory'), () => now)
+  const store = new ContinuumStore(join(root, 'memory'), 'a', () => now)
   const policy: MemoryPolicy = { ...DEFAULT_MEMORY_POLICY, ...options?.policy }
   const summaries = vi.fn(() => [{ conversationId: 'c1', title: '会话 c1', text: '与阿澄推进展示会筹备', updatedAt: base + 7_200_000, evidence: [] }])
   let suppressed: string[] = []
@@ -62,7 +62,7 @@ describe('continuum store', () => {
   it('keeps hand edits when appending new material', () => {
     const { root, store } = setup()
     store.appendDaily('2026-10-24', [{ conversationId: 'c2', title: '会话 c2', workspaceId: 'a', summary: '内核拆分', keyDetails: [{ text: 'FluxOs 内核拆分完成', refs: [{ conversationId: 'c2', messageId: 'm1', offset: 0, digest: digestFor('h3') }] }] }])
-    const file = join(root, 'memory', 'continuum', 'daily', '2026-10-24.md')
+    const file = join(root, 'memory', 'continuum', 'a', 'daily', '2026-10-24.md')
     writeFileSync(file, readFileSync(file, 'utf8').replace('# Daily rollup 2026-10-24', '# Daily rollup 2026-10-24\n\n用户手写备注：今天状态不错'), 'utf8')
     store.appendDaily('2026-10-24', [{ conversationId: 'c3', title: '会话 c3', workspaceId: 'a', summary: '', keyDetails: [{ text: '新对话内容', refs: [] }] }])
     const rollup = store.readDaily('2026-10-24')!
@@ -99,7 +99,7 @@ describe('continuum store', () => {
     const outcome = await maintenance.run(bad, signal)
     expect(outcome.entitiesTouched).toBe(0)
     expect(store.status().lastError).toContain('unsupported source')
-    expect(existsSync(join(root, 'memory', 'continuum', 'entities'))).toBe(false)
+    expect(existsSync(join(root, 'memory', 'continuum', 'a', 'entities'))).toBe(false)
   })
 
   it('gates entity extraction behind the daily continuum budget while dailies stay mechanical', async () => {
@@ -113,6 +113,119 @@ describe('continuum store', () => {
     expect(nextDay.dailyAppended).toBeGreaterThan(0)
     expect(nextDay.entityCalls).toBe(1)
     expect(store.status().lastError).toContain('extraction exploded')
+  })
+
+  it('applies valid entities despite a malformed sibling and advances the cursor', async () => {
+    const { maintenance, signal, store, generate } = setup()
+    const mixed = vi.fn(async () => JSON.stringify({ entities: [
+      { name: '阿澄', kind: 'person', aliases: [], summary: '有效实体', events: [{ date: '2026-10-21', text: '有效事件', sourceIds: ['S1'] }] },
+      { name: '幽灵', kind: 'topic', summary: '捏造', events: [{ date: '2026-10-21', text: '坏引用', sourceIds: ['S99'] }] },
+    ] }))
+    const outcome = await maintenance.run(mixed, signal)
+    expect(outcome.entitiesTouched).toBe(1)
+    expect(store.searchEntities('阿澄', 1)[0].summary).toBe('有效实体')
+    expect(store.status().lastError).toContain('skipped 1 malformed')
+    // cursor advanced: a clean rerun must not re-extract
+    const rerun = await maintenance.run(generate, signal)
+    expect(rerun.entityCalls).toBe(0)
+  })
+
+  it('retries entity extraction after a failed pass instead of losing the batch', async () => {
+    const { maintenance, generate, signal, store } = setup()
+    const first = await maintenance.run(async () => '{invalid json', signal)
+    expect(first.dailyAppended).toBeGreaterThan(0)
+    expect(store.status().lastError).toBeTruthy()
+    const second = await maintenance.run(generate, signal)
+    expect(second.dailyAppended).toBe(0)
+    expect(second.entitiesTouched).toBe(1)
+    const third = await maintenance.run(generate, signal)
+    expect(third.entityCalls).toBe(0)
+  })
+
+  it('never spends narrative budget when a narrative already exists', async () => {
+    const { maintenance, generate, signal, store } = setup({ policy: { continuumNarrative: true, maxContinuumCallsPerDay: 2 } })
+    await maintenance.run(generate, signal)
+    expect(store.readDaily('2026-10-24')!.narrative).toBeTruthy()
+    expect(store.status().callsToday).toBe(2)
+    const narrative = vi.fn(async () => '重复叙述')
+    await maintenance.run(narrative, signal)
+    expect(narrative).not.toHaveBeenCalled()
+    expect(store.status().callsToday).toBe(2)
+  })
+
+  it('neutralizes control characters in entity names and aliases', () => {
+    const { root, store } = setup()
+    const { slug } = store.upsertEntity({ name: '阿澄\nkind: topic\n---', kind: 'person', aliases: ['别名\u0000注入'], summary: 's', events: [] })
+    const raw = readFileSync(join(root, 'memory', 'continuum', 'persons', `${slug}.md`), 'utf8')
+    expect(raw).toContain('# 阿澄 kind: topic ---')
+    expect(store.readEntity(slug)!.aliases[0]).not.toContain('\u0000')
+    expect(store.readEntity(slug)!.name).toBe('阿澄 kind: topic ---')
+  })
+
+  it('keeps distinct entities whose names slugify identically', () => {
+    const { store } = setup()
+    const first = store.upsertEntity({ name: 'A-B', kind: 'project', summary: 'one', events: [] })
+    const second = store.upsertEntity({ name: 'A B', kind: 'project', summary: 'two', events: [] })
+    expect(second.created).toBe(true)
+    expect(second.slug).not.toBe(first.slug)
+    expect(store.readEntity(first.slug)!.summary).toBe('one')
+    expect(store.readEntity(second.slug)!.summary).toBe('two')
+  })
+
+  it('places new sections before Corrections even after same-day bullet appends', () => {
+    const { root, store } = setup()
+    store.appendDaily('2026-10-24', [{ conversationId: 'c1', title: '会话 c1', workspaceId: 'a', summary: '', keyDetails: [{ text: '第一条', refs: [] }] }])
+    store.annotateCorrection('2026-10-24', '历史更正')
+    store.appendDaily('2026-10-24', [
+      { conversationId: 'c1', title: '会话 c1', workspaceId: 'a', summary: '', keyDetails: [{ text: '第二条', refs: [] }] },
+      { conversationId: 'c9', title: '会话 c9', workspaceId: 'a', summary: '', keyDetails: [{ text: '新会话', refs: [] }] },
+    ])
+    const rollup = store.readDaily('2026-10-24')!
+    expect(rollup.entries.map(entry => entry.conversationId)).toEqual(['c1', 'c9'])
+    expect(rollup.entries[0].keyDetails.map(detail => detail.text)).toEqual(['第一条', '第二条'])
+    expect(rollup.corrections).toHaveLength(1)
+    const raw = readFileSync(join(root, 'memory', 'continuum', 'a', 'daily', '2026-10-24.md'), 'utf8')
+    expect(raw.indexOf('会话 c9')).toBeGreaterThan(-1)
+    expect(raw.indexOf('## Corrections')).toBeGreaterThan(-1)
+    expect(raw.indexOf('会话 c9')).toBeLessThan(raw.indexOf('## Corrections'))
+  })
+
+  it('isolates workspaces structurally while persons stay shared', () => {
+    const { root } = setup()
+    const storeA = new ContinuumStore(join(root, 'memory'), 'a')
+    const storeB = new ContinuumStore(join(root, 'memory'), 'b')
+    storeA.appendDaily('2026-10-24', [{ conversationId: 'c-a', title: '甲项目会话', workspaceId: 'a', summary: '', keyDetails: [{ text: '甲的细节', refs: [] }] }])
+    storeA.upsertEntity({ name: '甲项目', kind: 'project', summary: 'a-side', events: [] })
+    storeA.upsertEntity({ name: '阿澄', kind: 'person', summary: '跨项目人物', events: [] })
+    storeB.appendDaily('2026-10-24', [{ conversationId: 'c-b', title: '乙项目会话', workspaceId: 'b', summary: '', keyDetails: [{ text: '乙的细节', refs: [] }] }])
+    expect(storeB.readDaily('2026-10-24')!.entries.map(entry => entry.conversationId)).toEqual(['c-b'])
+    expect(storeB.readDaily('2026-10-24')!.entries[0].keyDetails[0].text).not.toContain('甲')
+    expect(storeB.searchEntities('甲项目', 3)).toHaveLength(0)
+    expect(storeB.searchEntities('阿澄', 3)).toHaveLength(1)
+    const policy = { ...DEFAULT_MEMORY_POLICY, maxContinuumCallsPerDay: 1 }
+    expect(storeA.claimBudget(policy)).toBe(true)
+    expect(storeB.claimBudget(policy)).toBe(false)
+  })
+
+  it('backfills an empty section summary on a later append', () => {
+    const { store } = setup()
+    store.appendDaily('2026-10-24', [{ conversationId: 'c1', title: '会话 c1', workspaceId: 'a', summary: '', keyDetails: [{ text: '细节', refs: [] }] }])
+    expect(store.readDaily('2026-10-24')!.entries[0].summary).toBe('')
+    store.appendDaily('2026-10-24', [{ conversationId: 'c1', title: '会话 c1', workspaceId: 'a', summary: '补到的连续性摘要', keyDetails: [] }])
+    const rollup = store.readDaily('2026-10-24')!
+    expect(rollup.entries[0].summary).toBe('补到的连续性摘要')
+    expect(rollup.entries[0].keyDetails.map(detail => detail.text)).toEqual(['细节'])
+  })
+
+  it('feeds the established entity roster to the extraction prompt', async () => {
+    const { maintenance, generate, signal, hits, advance } = setup()
+    await maintenance.run(generate, signal)
+    advance(DAY)
+    hits.push(hit('h5', 'c4', 'm1', '阿澄负责物料清单', Date.parse('2026-10-25T10:00:00Z')))
+    const seen: string[] = []
+    await maintenance.run(async prompt => { seen.push(prompt); return generate() }, signal)
+    expect(seen[0]).toContain('阿澄')
+    expect(seen[0]).toContain('Established entities already on record')
   })
 })
 
@@ -142,12 +255,43 @@ describe('continuum recall routing', () => {
     expect(message?.nextReads).toEqual([{ conversationId: 'c1', messageId: 'm1', offset: 0 }])
   })
 
-  it('routes exact to message chunks and reports misses honestly', () => {
-    const { store, hits } = setup()
-    const found = routeRecall({ depth: 'exact', query: '预算' }, { store, searchMessages: (query, limit) => hits.filter(hit => hit.text.includes(query)).slice(0, limit) })
-    expect(found.sections[0].text).toContain('5000')
-    const miss = routeRecall({ depth: 'exact', query: '不存在' }, { store, searchMessages: () => [] })
-    expect(miss.sections[0].kind).toBe('hint')
+  it('filters cross-workspace person events that cannot be read under policy', () => {
+    const { store } = setup()
+    store.upsertEntity({ name: '阿澄', kind: 'person', summary: '跨项目人物', events: [
+      { date: '2026-10-21', at: 0, text: '本工作区事件', refs: [{ conversationId: 'c1', messageId: 'm1', offset: 0, digest: digestFor('h1') }] },
+      { date: '2026-10-22', at: 0, text: '外部工作区事件', refs: [{ conversationId: 'other', messageId: 'm9', offset: 0, digest: digestFor('foreign') }] },
+    ] })
+    const result = routeRecall({ depth: 'topic', query: '阿澄' }, { store, readRef: ref => ref.conversationId === 'c1' })
+    const entity = result.sections.find(section => section.kind === 'entity')
+    expect(entity?.text).toContain('本工作区事件')
+    expect(entity?.text).not.toContain('外部工作区事件')
+  })
+
+  it('validates rollup evidence in one batched call per document', () => {
+    const { store } = setup()
+    store.appendDaily('2026-10-24', [{ conversationId: 'c2', title: '会话 c2', workspaceId: 'a', summary: '', keyDetails: [
+      { text: '细节一', refs: [{ conversationId: 'c2', messageId: 'm1', offset: 0, digest: digestFor('h3') }] },
+      { text: '细节二', refs: [{ conversationId: 'c2', messageId: 'm2', offset: 0, digest: digestFor('h4') }] },
+    ] }])
+    const validate = vi.fn(() => [true, true])
+    routeRecall({ depth: 'recent' }, { store, now: () => Date.parse('2026-10-24T12:00:00Z'), validateRefs: validate })
+    expect(validate).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops rollup details whose evidence no longer validates', () => {
+    const { store } = setup()
+    store.appendDaily('2026-10-24', [
+      { conversationId: 'c2', title: '会话 c2', workspaceId: 'a', summary: '', keyDetails: [
+        { text: '仍然有效的细节', refs: [{ conversationId: 'c2', messageId: 'm1', offset: 0, digest: digestFor('h3') }] },
+        { text: '已被篡改的细节', refs: [{ conversationId: 'c2', messageId: 'm2', offset: 0, digest: digestFor('gone') }] },
+      ] },
+    ])
+    const result = routeRecall({ depth: 'recent' }, { store, now: () => Date.parse('2026-10-24T12:00:00Z'),
+      validateRefs: refs => refs.map(ref => ref.digest === digestFor('gone') ? false : true) })
+    const rollup = result.sections.find(section => section.kind === 'rollup')
+    expect(rollup?.text).toContain('仍然有效的细节')
+    expect(rollup?.text).not.toContain('已被篡改的细节')
+    expect(rollup?.refs.some(ref => ref.digest === digestFor('gone'))).toBe(false)
   })
 })
 
@@ -159,8 +303,8 @@ describe('recall tool surface', () => {
   })
   it('enforces depth-scoped argument rules', () => {
     expect(validateToolArgs('recall', { depth: 'recent' })).toEqual({ valid: true })
-    expect(validateToolArgs('recall', { depth: 'exact', query: 'x' })).toEqual({ valid: true })
-    expect(validateToolArgs('recall', { depth: 'exact' }).valid).toBe(false)
+    expect(validateToolArgs('recall', { depth: 'deep', query: 'x' })).toEqual({ valid: true })
+    expect(validateToolArgs('recall', { depth: 'exact', query: 'x' }).valid).toBe(false)
     expect(validateToolArgs('recall', { depth: 'recent', query: 'x', entity: 'y' }).valid).toBe(false)
     expect(validateToolArgs('recall', { depth: 'topic', query: 'x', date: '2026-10-24' }).valid).toBe(false)
     expect(validateToolArgs('recall', { depth: 'deep', date: '2026-10-24' })).toEqual({ valid: true })

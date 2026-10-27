@@ -54,6 +54,8 @@ export interface Memory {
   reviewState: 'auto' | 'user_approved' | 'user_edited'
   status: 'active' | 'superseded' | 'rejected' | 'stale'
   supersededBy?: string
+  /** Derived from a workspace rule file, so it can only be changed by editing that file. */
+  readOnly?: boolean
 }
 
 export interface MemoryGroup {

@@ -28,6 +28,17 @@ const evidence = (hit: MemoryHistoryHit): MemoryEvidence => ({ kind: 'conversati
   messageId: hit.messageId, digest: hit.digest, offset: hit.offset, quote: hit.text.slice(0, 240) })
 const refKey = (ref: MemoryEvidence) => `${ref.conversationId}:${ref.messageId}`
 const kinds = new Set(['rule', 'fact', 'preference', 'episode', 'todo', 'verdict', 'strategy', 'pitfall', 'workflow'])
+const statuses = ['active', 'stale', 'rejected', 'superseded']
+const scopes = ['global', 'workspace_private']
+
+/**
+ * A single damaged row must never take the whole store down: only these fields
+ * are required to keep rendering, editing and injecting the remaining records.
+ */
+const recordValid = (record: DerivedMemory): boolean => Boolean(record) && typeof record.id === 'string'
+  && typeof record.projectId === 'string' && typeof record.key === 'string' && typeof record.text === 'string'
+  && Array.isArray(record.evidence) && Array.isArray(record.tags)
+  && statuses.includes(record.status) && scopes.includes(record.scope)
 
 export class LongTermMemory {
   private readonly statePath: string
@@ -62,10 +73,10 @@ export class LongTermMemory {
       const state = JSON.parse(readFileSync(this.statePath, 'utf8')) as State
       if (state.schemaVersion !== 1 || !Array.isArray(state.records) || !Array.isArray(state.summaries)
         || !state.checkpoints || !Array.isArray(state.suppressed) || !state.maintenance
-        || !Number.isSafeInteger(state.calls) || state.calls < 0 || typeof state.day !== 'string'
-        || state.records.some(record => typeof record.id !== 'string' || typeof record.projectId !== 'string' || typeof record.key !== 'string'
-          || typeof record.text !== 'string' || !Array.isArray(record.evidence) || !Array.isArray(record.tags)
-          || !['active', 'stale', 'rejected', 'superseded'].includes(record.status) || !['global', 'workspace_private'].includes(record.scope))) throw new Error('Invalid memory synthesis state')
+        || !Number.isSafeInteger(state.calls) || state.calls < 0 || typeof state.day !== 'string') throw new Error('Invalid memory synthesis state')
+      const records = state.records.filter(recordValid)
+      if (records.length !== state.records.length) state.records = records
+      if (state.suppressed.some(key => typeof key !== 'string')) state.suppressed = state.suppressed.filter(key => typeof key === 'string')
       return state
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -107,17 +118,21 @@ export class LongTermMemory {
       lastCompletedAt: state.maintenance[this.projectId]?.lastCompletedAt, lastError: state.maintenance[this.projectId]?.lastError }
   }
   update(id: string, update: Omit<MemoryUpdateRequest, 'workspacePath' | 'id'>): boolean {
+    // The desktop bridge always fills every optional field, so `undefined` here means
+    // "leave it alone". Assigning it would erase stored values and JSON.stringify would
+    // then drop the key, leaving a record that can never be loaded again.
+    const patch = Object.fromEntries(Object.entries(update).filter(([, value]) => value !== undefined)) as typeof update
     return this.mutate(state => {
       const record = state.records.find(item => item.id === id && (item.scope === 'global' || item.projectId === this.projectId))
       if (!record) return false
-      if (update.scope && update.scope !== record.scope) throw new Error('Create memory in the destination scope before removing the original')
-      if (update.text !== undefined && (!update.text.trim() || update.text.length > 8000)) throw new Error('Invalid memory text')
-      Object.assign(record, update, { updatedAt: this.now() })
-      if (update.status === 'active') {
+      if (patch.scope && patch.scope !== record.scope) throw new Error('Create memory in the destination scope before removing the original')
+      if (patch.text !== undefined && (!patch.text.trim() || patch.text.length > 8000)) throw new Error('Invalid memory text')
+      Object.assign(record, patch, { updatedAt: this.now() })
+      if (patch.status === 'active') {
         const keys = new Set(record.evidence.map(refKey))
         state.suppressed = state.suppressed.filter(key => !keys.has(key) || state.records.some(other => other.id !== id && other.status === 'rejected' && other.evidence.some(ref => refKey(ref) === key)))
       }
-      if (update.status === 'rejected' || update.text !== undefined) {
+      if (patch.status === 'rejected' || patch.text !== undefined) {
         const keys = record.evidence.map(refKey)
         state.suppressed = [...new Set([...state.suppressed, ...keys])]
         state.summaries = state.summaries.filter(summary => !summary.evidence.some(ref => keys.includes(refKey(ref))))

@@ -17,6 +17,8 @@ const DEEP_ROLLUP_CHARS = 12_000
 const ENTITY_EVENTS_SHOWN = 5
 const SEARCH_DAILY_LIMIT_DAYS = 366
 
+export type { ContinuumRecallDepth }
+
 export interface ContinuumRecallInput {
   depth: ContinuumRecallDepth
   query?: string
@@ -30,6 +32,9 @@ export interface ContinuumRecallDeps {
   summaries?: () => MemoryContinuitySummary[]
   searchMessages?: (query: string, limit: number) => MemoryHistoryHit[]
   memories?: (query: string, limit: number) => Memory[]
+  validateRefs?: (refs: ContinuumReference[]) => boolean[]
+  /** Policy-aware evidence readability; gates cross-workspace person events. */
+  readRef?: (ref: ContinuumReference) => boolean
   now?: () => number
 }
 
@@ -39,6 +44,41 @@ function isoDate(at: number): string {
 
 function nextReadsFrom(refs: ContinuumReference[]): ContinuumNextRead[] {
   return refs.slice(0, 8).map(ref => ({ conversationId: ref.conversationId, messageId: ref.messageId, offset: ref.offset }))
+}
+
+/**
+ * Read-time evidence filtering. Refs are validated in one batched call per
+ * document (the underlying index refreshes its catalog on every validate
+ * call, so per-detail calls would scale with detail count); entity events
+ * additionally require the evidence to be readable under the current
+ * workspace's history policy, which is what keeps cross-workspace person
+ * timelines from showing unverifiable entries.
+ */
+function applyEvidenceFilter(deps: ContinuumRecallDeps) {
+  const validate = deps.validateRefs
+  const rollup = (value: ContinuumDailyRollup): ContinuumDailyRollup => {
+    if (!validate) return value
+    const allRefs = value.entries.flatMap(entry => entry.keyDetails.flatMap(detail => detail.refs))
+    if (!allRefs.length) return value
+    const verdicts = new Map(validate(allRefs).map((ok, index) => [allRefs[index], ok]))
+    const entries = value.entries.map(entry => ({
+      ...entry,
+      keyDetails: entry.keyDetails.filter(detail => !detail.refs.length || detail.refs.some(ref => verdicts.get(ref) === true)),
+    }))
+    return { ...value, entries }
+  }
+  const events = (timeline: Array<{ date: string; text: string; refs: ContinuumReference[] }>): Array<{ date: string; text: string; refs: ContinuumReference[] }> => {
+    if (!validate && !deps.readRef) return timeline
+    const refs = timeline.flatMap(event => event.refs)
+    const verdicts = validate ? new Map(validate(refs).map((ok, index) => [refs[index], ok])) : undefined
+    return timeline.filter(event => {
+      if (!event.refs.length) return true
+      if (verdicts && !event.refs.some(ref => verdicts.get(ref) === true)) return false
+      if (deps.readRef) return event.refs.some(ref => deps.readRef!(ref))
+      return true
+    })
+  }
+  return { rollup, events }
 }
 
 function collectRollupRefs(rollup: ContinuumDailyRollup, cap = 24): ContinuumReference[] {
@@ -74,22 +114,92 @@ function messageSection(hit: MemoryHistoryHit): ContinuumRecallSection {
     nextReads: [{ conversationId: hit.conversationId, messageId: hit.messageId, offset: hit.offset }] }
 }
 
-function entitySection(dossier: { name: string; kind: string; summary: string; timeline: Array<{ date: string; text: string; refs: ContinuumReference[] }> }, query: string): ContinuumRecallSection {
-  const needle = query.trim().normalize('NFKC').toLowerCase()
-  const events = dossier.timeline.filter(event => !needle || event.text.normalize('NFKC').toLowerCase().includes(needle)).slice(-ENTITY_EVENTS_SHOWN)
-  const shown = events.length ? events : dossier.timeline.slice(-ENTITY_EVENTS_SHOWN)
-  const text = [dossier.summary, '', ...shown.map(event => `[${event.date}] ${event.text}`)].join('\n')
-  return { kind: 'entity', title: `${dossier.name} (${dossier.kind})`, text, refs: shown.flatMap(event => event.refs).slice(0, 8), nextReads: nextReadsFrom(shown.flatMap(event => event.refs)) }
+/** Deterministic three-depth recall router over the Continuum layers. */
+export function routeRecall(input: ContinuumRecallInput, deps: ContinuumRecallDeps): ContinuumRecallResult {
+  const now = (deps.now ?? Date.now)()
+  const sections: ContinuumRecallSection[] = []
+  let used = 0
+  let truncated = false
+  const push = (section: ContinuumRecallSection): void => {
+    if (used + section.text.length > RECALL_RESULT_BUDGET) { truncated = true; return }
+    sections.push(section)
+    used += section.text.length
+  }
+  const evidence = applyEvidenceFilter(deps)
+
+  if (input.depth === 'recent') {
+    for (const summary of (deps.summaries?.() ?? []).slice(-RECENT_SUMMARIES).reverse()) {
+      // Evidence without a digest cannot be verified; keep it out of refs.
+      const verified = summary.evidence.flatMap(item => item.conversationId && item.messageId && item.digest
+        ? [{ ref: { conversationId: item.conversationId, messageId: item.messageId, offset: item.offset ?? 0, digest: item.digest } as ContinuumReference, next: { conversationId: item.conversationId, messageId: item.messageId, offset: item.offset ?? 0 } }]
+        : [])
+      push({ kind: 'summary', title: summary.title, text: summary.text.length > RECENT_SUMMARY_CHARS ? `${summary.text.slice(0, RECENT_SUMMARY_CHARS)}…` : summary.text,
+        refs: verified.map(item => item.ref),
+        nextReads: verified.map(item => item.next) })
+    }
+    for (const date of [isoDate(now), isoDate(now - 86_400_000)]) {
+      const rollup = deps.store.readDaily(date)
+      if (rollup) {
+        // Text and refs must come from the same validated view.
+        const validated = evidence.rollup(rollup)
+        push({ kind: 'rollup', title: `Daily rollup ${date}`, text: renderRollup(validated, ROLLUP_SECTION_CHARS), refs: collectRollupRefs(validated) })
+      }
+    }
+    if (!sections.length) push({ kind: 'hint', title: 'No recent memory', text: 'No continuity summaries or daily rollups exist yet; keep conversing and let memory maintenance run.', refs: [] })
+    return { depth: input.depth, sections, truncated }
+  }
+
+  if (input.depth === 'topic') {
+    const query = input.query ?? input.entity ?? ''
+    for (const dossier of deps.store.searchEntities(query, 3)) {
+      const events = evidence.events(dossier.timeline)
+      const needle = query.trim().normalize('NFKC').toLowerCase()
+      const matched = events.filter(event => !needle || event.text.normalize('NFKC').toLowerCase().includes(needle)).slice(-ENTITY_EVENTS_SHOWN)
+      const shown = matched.length ? matched : events.slice(-ENTITY_EVENTS_SHOWN)
+      const text = [dossier.summary, '', ...shown.map(event => `[${event.date}] ${event.text}`)].join('\n')
+      push({ kind: 'entity', title: `${dossier.name} (${dossier.kind})`, text, refs: shown.flatMap(event => event.refs).slice(0, 8), nextReads: nextReadsFrom(shown.flatMap(event => event.refs)) })
+    }
+    for (const match of searchDailySections(deps, evidence, query, 2)) {
+      push({ kind: 'rollup', title: `Daily rollup ${match.rollup.date}`, text: match.text, refs: collectRollupRefs(match.rollup) })
+    }
+    for (const memory of deps.memories?.(query, 6) ?? []) push({ kind: 'memory', title: `Memory · ${memory.kind}`, text: memory.text, refs: [] })
+    if (!sections.length) push({ kind: 'hint', title: 'No topic match', text: `Nothing matched "${query}" in entity dossiers, daily rollups or memories. Try recall depth "deep" or search_history.`, refs: [] })
+    return { depth: input.depth, sections, truncated }
+  }
+
+  // deep
+  if (input.date) {
+    const rollup = deps.store.readDaily(input.date)
+    if (rollup) {
+      push({ kind: 'rollup', title: `Daily rollup ${input.date}`, text: renderRollup(evidence.rollup(rollup), DEEP_ROLLUP_CHARS), refs: collectRollupRefs(rollup, 40), nextReads: nextReadsFrom(collectRollupRefs(rollup, 40)) })
+    } else {
+      push({ kind: 'hint', title: 'No rollup for date', text: `No daily rollup exists for ${input.date}.`, refs: [] })
+    }
+  }
+  const query = (input.query ?? '').trim()
+  if (query) {
+    for (const match of searchDailySections(deps, evidence, query, input.date ? 2 : 5)) {
+      push({ kind: 'rollup', title: `Daily rollup ${match.rollup.date}`, text: match.text, refs: collectRollupRefs(match.rollup), nextReads: nextReadsFrom(collectRollupRefs(match.rollup)) })
+    }
+    for (const dossier of deps.store.searchEntities(query, 2)) {
+      const events = evidence.events(dossier.timeline)
+      const text = [dossier.summary, '', ...events.slice(-ENTITY_EVENTS_SHOWN).map(event => `[${event.date}] ${event.text}`)].join('\n')
+      push({ kind: 'entity', title: `${dossier.name} (${dossier.kind})`, text, refs: events.slice(-ENTITY_EVENTS_SHOWN).flatMap(event => event.refs).slice(0, 8) })
+    }
+    const limit = Math.min(Math.max(1, input.limit ?? 10), 50)
+    for (const hit of deps.searchMessages?.(query, limit) ?? []) push(messageSection(hit))
+    if (!sections.length) push({ kind: 'hint', title: 'No deep match', text: `Nothing matched "${query}" across rollups, entities or message history. Try search_history with alternate wording.`, refs: [] })
+  }
+  return { depth: input.depth, sections, truncated }
 }
 
-function searchDailySections(store: ContinuumStore, query: string, limit: number): Array<{ rollup: ContinuumDailyRollup; text: string }> {
+function searchDailySections(deps: ContinuumRecallDeps, evidence: ReturnType<typeof applyEvidenceFilter>, query: string, limit: number): Array<{ rollup: ContinuumDailyRollup; text: string }> {
   const needle = query.trim().normalize('NFKC').toLowerCase()
   if (!needle) return []
-  const dates = store.listDailyDates().slice(-SEARCH_DAILY_LIMIT_DAYS)
+  const dates = deps.store.listDailyDates().slice(-SEARCH_DAILY_LIMIT_DAYS)
   const results: Array<{ rollup: ContinuumDailyRollup; text: string; score: number }> = []
   for (let index = dates.length - 1; index >= 0 && results.length < limit; index -= 1) {
-    const rollup = store.readDaily(dates[index])
-    if (!rollup) continue
+    const rollup = evidence.rollup(deps.store.readDaily(dates[index]) ?? { date: dates[index], generatedAt: 0, workspaces: [], entries: [], corrections: [] })
     const matched = rollup.entries
       .map(entry => ({ entry, hit: `${entry.title} ${entry.summary} ${entry.keyDetails.map(detail => detail.text).join(' ')}`.normalize('NFKC').toLowerCase().includes(needle) }))
       .filter(item => item.hit)
@@ -104,72 +214,4 @@ function searchDailySections(store: ContinuumStore, query: string, limit: number
     results.push({ rollup, text: lines.join('\n'), score: matched.length })
   }
   return results.sort((a, b) => b.score - a.score).map(({ rollup, text }) => ({ rollup, text: text.slice(0, ROLLUP_SECTION_CHARS) }))
-}
-
-/** Deterministic four-depth recall router over the Continuum layers. */
-export function routeRecall(input: ContinuumRecallInput, deps: ContinuumRecallDeps): ContinuumRecallResult {
-  const now = (deps.now ?? Date.now)()
-  const sections: ContinuumRecallSection[] = []
-  let used = 0
-  let truncated = false
-  const push = (section: ContinuumRecallSection): void => {
-    if (used + section.text.length > RECALL_RESULT_BUDGET) { truncated = true; return }
-    sections.push(section)
-    used += section.text.length
-  }
-
-  if (input.depth === 'recent') {
-    for (const summary of (deps.summaries?.() ?? []).slice(-RECENT_SUMMARIES).reverse()) {
-      push({ kind: 'summary', title: summary.title, text: summary.text.length > RECENT_SUMMARY_CHARS ? `${summary.text.slice(0, RECENT_SUMMARY_CHARS)}…` : summary.text,
-        refs: summary.evidence.flatMap(evidence => evidence.conversationId && evidence.messageId ? [{ conversationId: evidence.conversationId, messageId: evidence.messageId, offset: evidence.offset ?? 0, digest: evidence.digest ?? '' }] : []),
-        nextReads: summary.evidence.flatMap(evidence => evidence.conversationId && evidence.messageId ? [{ conversationId: evidence.conversationId, messageId: evidence.messageId, offset: evidence.offset ?? 0 }] : []) })
-    }
-    for (const date of [isoDate(now), isoDate(now - 86_400_000)]) {
-      const rollup = deps.store.readDaily(date)
-      if (rollup) push({ kind: 'rollup', title: `Daily rollup ${date}`, text: renderRollup(rollup, ROLLUP_SECTION_CHARS), refs: collectRollupRefs(rollup) })
-    }
-    if (!sections.length) push({ kind: 'hint', title: 'No recent memory', text: 'No continuity summaries or daily rollups exist yet; keep conversing and let memory maintenance run.', refs: [] })
-    return { depth: input.depth, sections, truncated }
-  }
-
-  if (input.depth === 'topic') {
-    const query = input.query ?? input.entity ?? ''
-    for (const dossier of deps.store.searchEntities(query, 3)) push(entitySection(dossier, query))
-    for (const match of searchDailySections(deps.store, query, 2)) {
-      push({ kind: 'rollup', title: `Daily rollup ${match.rollup.date}`, text: match.text, refs: collectRollupRefs(match.rollup) })
-    }
-    for (const memory of deps.memories?.(query, 6) ?? []) push({ kind: 'memory', title: `Memory · ${memory.kind}`, text: memory.text, refs: [] })
-    if (!sections.length) push({ kind: 'hint', title: 'No topic match', text: `Nothing matched "${query}" in entity dossiers, daily rollups or memories. Try recall depth "deep" or "exact".`, refs: [] })
-    return { depth: input.depth, sections, truncated }
-  }
-
-  if (input.depth === 'deep') {
-    if (input.date) {
-      const rollup = deps.store.readDaily(input.date)
-      if (rollup) {
-        push({ kind: 'rollup', title: `Daily rollup ${input.date}`, text: renderRollup(rollup, DEEP_ROLLUP_CHARS), refs: collectRollupRefs(rollup, 40), nextReads: nextReadsFrom(collectRollupRefs(rollup, 40)) })
-      } else {
-        push({ kind: 'hint', title: 'No rollup for date', text: `No daily rollup exists for ${input.date}.`, refs: [] })
-      }
-    }
-    const query = (input.query ?? '').trim()
-    if (query) {
-      for (const match of searchDailySections(deps.store, query, input.date ? 2 : 5)) {
-        push({ kind: 'rollup', title: `Daily rollup ${match.rollup.date}`, text: match.text, refs: collectRollupRefs(match.rollup), nextReads: nextReadsFrom(collectRollupRefs(match.rollup)) })
-      }
-      for (const dossier of deps.store.searchEntities(query, 2)) push(entitySection(dossier, query))
-      const limit = Math.min(Math.max(1, input.limit ?? 10), 50)
-      for (const hit of deps.searchMessages?.(query, limit) ?? []) push(messageSection(hit))
-      if (!sections.length) push({ kind: 'hint', title: 'No deep match', text: `Nothing matched "${query}" across rollups, entities or message history.`, refs: [] })
-    }
-    return { depth: input.depth, sections, truncated }
-  }
-
-  // exact
-  const query = (input.query ?? '').trim()
-  if (!query) return { depth: 'exact', sections: [{ kind: 'hint', title: 'Query required', text: 'Exact recall requires a query string.', refs: [] }], truncated: false }
-  const limit = Math.min(Math.max(1, input.limit ?? 12), 50)
-  for (const hit of deps.searchMessages?.(query, limit) ?? []) push(messageSection(hit))
-  if (!sections.length) push({ kind: 'hint', title: 'No message match', text: `No message chunks matched "${query}". The conversation may be redacted, archived or in another workspace.`, refs: [] })
-  return { depth: input.depth, sections, truncated }
 }

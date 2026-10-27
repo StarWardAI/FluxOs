@@ -258,15 +258,15 @@ const definitions: Omit<EnhancedToolDef, 'access'>[] = [
   },
   {
     name: 'recall',
-    description: 'Layered long-term recall across Continuum memory: continuity summaries, daily rollups, entity dossiers and message history, chosen by depth. recent resumes where previous conversations stopped; topic matches a person/project/theme across dossiers, rollups and memories; deep searches rollups and full message history for older or vague events; exact finds message chunks by text. Sections carry provenance references; follow them with read_history (conversation_id, message_id, offset) to verify the original message. Results are bounded and may be truncated; absence of a match is not proof the event never happened.',
+    description: 'Layered long-term recall across Continuum memory: continuity summaries, daily rollups, entity dossiers and message history, chosen by depth. recent resumes where previous conversations stopped; topic matches a person/project/theme across dossiers, rollups and memories; deep searches rollups, entities and full message history for older or vague events. For direct message-chunk search use search_history. Sections carry provenance references; follow them with read_history (conversation_id, message_id, offset) to verify the original message. Results are bounded and may be truncated; absence of a match is not proof the event never happened.',
     category: 'read',
     maxResultSizeChars: 32_000,
     parameters: [
-      { name: 'depth', type: 'string', description: 'Recall tier. recent: latest context, no query needed. topic: one subject across dossiers/rollups/memories. deep: older or vague events, searches rollups and message history. exact: message chunks by text.', required: true, enum: ['recent', 'topic', 'deep', 'exact'] },
-      { name: 'query', type: 'string', description: 'Search text. Required for topic, deep and exact.', required: false, schema: NON_EMPTY_STRING_SCHEMA },
+      { name: 'depth', type: 'string', description: 'Recall tier. recent: latest context, no query needed. topic: one subject across dossiers/rollups/memories. deep: older or vague events, searches rollups, entities and message history.', required: true, enum: ['recent', 'topic', 'deep'] },
+      { name: 'query', type: 'string', description: 'Search text. Required for topic and deep.', required: false, schema: NON_EMPTY_STRING_SCHEMA },
       { name: 'entity', type: 'string', description: 'Entity name or alias for topic recall.', required: false, schema: NON_EMPTY_STRING_SCHEMA },
       { name: 'date', type: 'string', description: 'Read one day\'s rollup directly (YYYY-MM-DD), for recent or deep depth.', required: false, schema: NON_EMPTY_STRING_SCHEMA },
-      { name: 'limit', type: 'number', description: 'Maximum message sections for deep/exact. Default 10/12, max 50.', required: false, schema: { type: 'integer', minimum: 1, maximum: 50 } },
+      { name: 'limit', type: 'number', description: 'Maximum message sections for deep. Default 10, max 50.', required: false, schema: { type: 'integer', minimum: 1, maximum: 50 } },
     ],
     isReadOnly: true,
     isDestructive: false,
@@ -882,10 +882,11 @@ export function validateToolArgs(toolName: string, args: Record<string, unknown>
   }
   if (toolName === 'recall') {
     const depth = args.depth
-    if (typeof depth !== 'string' || !['recent', 'topic', 'deep', 'exact'].includes(depth)) return { valid: false, error: 'depth must be recent, topic, deep or exact' }
+    if (typeof depth !== 'string' || !['recent', 'topic', 'deep'].includes(depth)) return { valid: false, error: 'depth must be recent, topic or deep' }
     if (args.date != null && depth !== 'recent' && depth !== 'deep') return { valid: false, error: 'date is only valid with recent or deep depth' }
     if (args.entity != null && depth !== 'topic') return { valid: false, error: 'entity is only valid with topic depth' }
-    if ((depth === 'topic' || depth === 'exact') && args.query == null && (depth !== 'topic' || args.entity == null)) return { valid: false, error: 'topic/exact recall requires a query (or entity for topic)' }
+    if (depth === 'topic' && args.query == null && args.entity == null) return { valid: false, error: 'topic recall requires a query or entity' }
+    if (depth === 'deep' && args.query == null && args.date == null) return { valid: false, error: 'deep recall requires a query or a date' }
     if (depth === 'deep' && args.query == null && args.date == null) return { valid: false, error: 'deep recall requires a query or a date' }
     if (args.query != null && typeof args.query !== 'string') return { valid: false, error: 'query must be a string' }
     if (args.date != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(args.date))) return { valid: false, error: 'date must be YYYY-MM-DD' }

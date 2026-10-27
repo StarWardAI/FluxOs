@@ -264,7 +264,7 @@ export interface ToolExecutor {
   memoryConsolidate?(generate: (prompt: string, maxTokens: number, signal: AbortSignal) => Promise<string>, signal: AbortSignal): Promise<boolean>
   memoryMaintainContinuum?(generate: (prompt: string, maxTokens: number, signal: AbortSignal) => Promise<string>, signal: AbortSignal): Promise<boolean>
   memoryContinuumStatus?(): Promise<Result<any>>
-  memoryRecall?(query: { depth: 'recent' | 'topic' | 'deep' | 'exact'; query?: string; entity?: string; date?: string; limit?: number }): Promise<Result<any>>
+  memoryRecall?(query: { depth: 'recent' | 'topic' | 'deep'; query?: string; entity?: string; date?: string; limit?: number }): Promise<Result<any>>
   memoryQuery(query: Record<string, any>): Promise<Result<any>>
   memoryRemember(data: Record<string, any>): Promise<Result<any>>
   memoryForget(data: Record<string, any>): Promise<Result<void>>

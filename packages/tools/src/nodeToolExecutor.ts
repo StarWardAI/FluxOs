@@ -386,20 +386,26 @@ export class NodeToolExecutor implements ToolExecutor {
     const store = this.memoryService.continuum
     return { success: true, data: { ...store?.status() ?? { dailyCount: 0, entityCount: 0, dirtyEntities: [], callsToday: 0 }, enabled: Boolean(store), policy: this.memoryService.getPolicy() ?? null } }
   }
-  async memoryRecall(query: { depth: 'recent' | 'topic' | 'deep' | 'exact'; query?: string; entity?: string; date?: string; limit?: number }): Promise<Result<ContinuumRecallResult>> {
+  async memoryRecall(query: { depth: 'recent' | 'topic' | 'deep'; query?: string; entity?: string; date?: string; limit?: number }): Promise<Result<ContinuumRecallResult>> {
     try {
       const store = this.memoryService.continuum
       const longTerm = this.memoryService.longTerm
       if (!store) return { success: false, error: 'Continuum memory is unavailable for this workspace' }
       let memories: Memory[] = []
-      if (query.depth === 'topic' && query.query) {
-        memories = await this.memoryService.query({ workspacePath: this.workspaceRoot, query: query.query, limit: 6 })
+      const topicQuery = query.query ?? query.entity
+      if (query.depth === 'topic' && topicQuery) {
+        memories = await this.memoryService.query({ workspacePath: this.workspaceRoot, query: topicQuery, limit: 6 })
       }
       const result = routeRecall(query, {
         store,
         summaries: () => longTerm?.status().summaries ?? [],
         searchMessages: (text, limit) => longTerm?.search(text, limit) ?? [],
         memories: () => memories,
+        validateRefs: refs => this.memoryService.validateContinuumRefs(refs),
+        readRef: ref => {
+          const live = longTerm?.read(ref.conversationId, ref.messageId, ref.offset)
+          return Boolean(live && live.digest === ref.digest)
+        },
       })
       return { success: true, data: result }
     } catch (e) {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -126,5 +126,26 @@ describe('durable memory synthesis', () => {
     advance(7200000)
     expect(memory.records()).toEqual([])
     expect(memory.records(true)[0].status).toBe('stale')
+  })
+  it('ignores undefined optional fields so a status-only update cannot erase a memory', async () => {
+    const { memory, generate, signal, history, root } = setup()
+    await memory.consolidate(generate, signal)
+    const id = memory.records()[0].id
+    // The desktop bridge fills every optional field, so a status change arrives with
+    // text/scope/kind/… explicitly undefined.
+    expect(memory.update(id, { status: 'rejected', text: undefined, scope: undefined, kind: undefined, confidence: undefined, tags: undefined, pinned: undefined } as never)).toBe(true)
+    expect(memory.update(id, { status: 'active' })).toBe(true)
+    const reopened = new LongTermMemory(join(root, 'global'), join(root, 'a'), 'a', history)
+    expect(reopened.records()).toMatchObject([{ id, status: 'active', scope: 'workspace_private', kind: 'fact', text: expect.stringContaining('43891') }])
+  })
+  it('drops a damaged record instead of failing every memory read', async () => {
+    const { memory, generate, signal, root } = setup()
+    await memory.consolidate(generate, signal)
+    const statePath = join(root, 'global', 'synthesis.json')
+    const state = JSON.parse(readFileSync(statePath, 'utf8'))
+    state.records.push({ id: 'broken', projectId: 'a', key: 'broken', status: 'active' })
+    writeFileSync(statePath, JSON.stringify(state))
+    expect(memory.records()).toHaveLength(1)
+    expect(memory.status().summaries).toHaveLength(1)
   })
 })

@@ -71,6 +71,16 @@ describe('persistent memory retrieval', () => {
     expect(bounded.includedCount).toBe((bounded.text.match(/  - <(?:rule|fact)\b/g) ?? []).length)
   })
 
+  it('explains that rule-file memories are read-only instead of claiming they are missing', async () => {
+    const root = workspace(), service = new MemoryService()
+    writeFileSync(join(root, 'AGENTS.md'), '- Mandatory rule 0')
+    const rule = (await service.getSnapshot(root)).groups.flatMap(group => group.items).find(item => item.id.startsWith('mem_'))!
+    expect(rule.readOnly).toBe(true)
+    expect(await service.forget({ workspacePath: root, id: rule.id })).toEqual({ success: false, error: expect.stringContaining('AGENTS.md') })
+    expect(await service.update({ workspacePath: root, id: rule.id, pinned: true })).toEqual({ success: false, error: expect.stringContaining('read-only') })
+    expect((await service.getSnapshot(root)).groups.flatMap(group => group.items)).toHaveLength(1)
+  })
+
   it.each(['FLUXAGENT.md', 'fluxagent.md', '.fluxagent/FLUXAGENT.md'])('refreshes cached %s rules after edits and deletion', async file => {
     const root = workspace(), source = join(root, file), service = new MemoryService()
     mkdirSync(dirname(source), { recursive: true })

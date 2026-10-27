@@ -163,6 +163,7 @@ function buildMemoriesFromBody(
       tags: extraTags,
       reviewState: 'user_edited',
       status: 'active',
+      readOnly: true,
     })
   }
 
