@@ -1,5 +1,5 @@
 import type { AgentEventType } from '@fluxos/agent-runtime/agentEngine'
-import type { AgentAttachment, AgentCapabilitySelection, AgentRunState, AgentTurn, ApprovalPolicy } from '@fluxos/contracts/agentTypes'
+import type { AgentAttachment, AgentCapabilitySelection, AgentRunState, AgentTurn, ApprovalPolicy, ThinkingTrace } from '@fluxos/contracts/agentTypes'
 import type { WorkRun, WorkActivity, WorkExecutionSnapshot, WorkExecutionUpdate } from '@fluxos/contracts/workExecutionTypes'
 import type {
   AnyAppendConversationEventInput,
@@ -208,7 +208,7 @@ export class ConversationEventNormalizer {
         const stepId = this.currentStepId
         if (event.turn.role === 'assistant') {
           const thinking = event.turn.metadata?.thinking?.content
-          if (thinking) events.push(this.committedStreamEvent('thinking', thinking, event.turn.id, stepId, at, provenance))
+          if (thinking) events.push(this.committedStreamEvent('thinking', thinking, event.turn.id, stepId, at, provenance, event.turn.metadata?.thinking))
           if (event.turn.content) events.push(this.committedStreamEvent('answer', event.turn.content, event.turn.id, stepId, at, provenance))
         }
         events.push(this.turnEvent('turn.completed', event.turn, at, provenance, stepId))
@@ -396,7 +396,7 @@ export class ConversationEventNormalizer {
         const started = this.startStep(at, 'restored')
         events.push(started)
         const thinking = turn.metadata?.thinking?.content
-        if (thinking) events.push(this.committedStreamEvent('thinking', thinking, turn.id, started.stepId, at, 'restored'))
+        if (thinking) events.push(this.committedStreamEvent('thinking', thinking, turn.id, started.stepId, at, 'restored', turn.metadata?.thinking))
         if (turn.content) events.push(this.committedStreamEvent('answer', turn.content, turn.id, started.stepId, at, 'restored'))
         events.push(...this.finishStep(turn.metadata?.interrupted ? 'interrupted' : 'completed', at, 'restored'))
         events.push(this.turnEvent('turn.completed', turn, at, 'restored', started.stepId))
@@ -598,8 +598,12 @@ export class ConversationEventNormalizer {
     stepId: string | undefined,
     at: number,
     provenance: ConversationEventProvenance,
+    timing?: Pick<ThinkingTrace, 'startedAt' | 'durationMs'>,
   ): AppendConversationEventInput<'stream.committed'> {
-    return this.event('stream.committed', { channel, text }, {
+    return this.event('stream.committed', { channel, text,
+      ...(timing?.startedAt !== undefined ? { startedAt: timing.startedAt } : {}),
+      ...(timing?.durationMs !== undefined ? { durationMs: timing.durationMs } : {}),
+    }, {
       at,
       source: provenance === 'restored' ? 'runtime' : 'agent',
       provenance,

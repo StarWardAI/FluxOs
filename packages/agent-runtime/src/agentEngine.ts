@@ -2021,8 +2021,9 @@ export class AgentEngine {
     reasoningContent: string,
     model: APIModel | null,
     startTime: number,
+    thinkingStartedAt?: number,
   ): AgentTurn {
-    const interruptedTurn = this.finishInterruptedStream(textContent, reasoningContent, model, startTime)
+    const interruptedTurn = this.finishInterruptedStream(textContent, reasoningContent, model, startTime, undefined, thinkingStartedAt)
       || this.createAssistantTurn('', undefined, {
         model: model?.name,
         duration: Date.now() - startTime,
@@ -2609,6 +2610,7 @@ Before retrying:
     this.emitPromptModuleSnapshot(request.prompt.system, request.prompt.tools, request.prompt.messages)
     this.emit({ type: 'stream:start' })
     const operationSignal = this.runControl.getOperationSignal()
+    let thinkingStartedAt: number | undefined
     const exchange = await this.modelStreams.run(operationSignal, streamId => exchangeModelRequest(adapter, request, {
       signal: operationSignal, streamId,
       callbacks: {
@@ -2617,6 +2619,7 @@ Before retrying:
           this.emit({ type: 'stream:delta', text })
         },
         onReasoningDelta: text => {
+          if (text) thinkingStartedAt ??= Date.now()
           this.activeModelAttempt?.outputChunk('reasoning', text.length > 0)
           this.emit({ type: 'stream:thinking_delta', text })
         },
@@ -2635,11 +2638,11 @@ Before retrying:
     const { stream, result } = exchange
     if (!result.success) {
       if (this.runControl.isPauseSignal(operationSignal)) {
-        return this.createPausedAssistantTurn(stream.text, stream.reasoning, model, startTime)
+        return this.createPausedAssistantTurn(stream.text, stream.reasoning, model, startTime, thinkingStartedAt)
       }
       if (this.abortController?.signal.aborted) {
         const turn = this.finishInterruptedStream(stream.text, stream.reasoning, model, startTime,
-          resolveAgentRunInterruption(operationSignal) || interruptionMetadata('stop'))
+          resolveAgentRunInterruption(operationSignal) || interruptionMetadata('stop'), thinkingStartedAt)
         if (turn) return turn
         const error = new Error('aborted') as Error & { aborted?: boolean }
         error.aborted = true
@@ -2650,7 +2653,7 @@ Before retrying:
     if (completion.rememberRequest) this.rememberWarmRequestPrefix(protocol, request.body)
     if (completion.failure) {
       const { error, reportAsRequestError, preservePartial } = completion.failure
-      const turn = preservePartial ? this.finishInterruptedStream(completion.text, completion.reasoning, model, startTime) : null
+      const turn = preservePartial ? this.finishInterruptedStream(completion.text, completion.reasoning, model, startTime, undefined, thinkingStartedAt) : null
       if (turn) {
         if (reportAsRequestError) turn.metadata = { ...turn.metadata, internalKind: 'request_error', internalError: error.message }
         return turn
@@ -2667,6 +2670,7 @@ Before retrying:
       requestStartedAt: exchange.requestStartedAt, responseReceivedAt: exchange.responseReceivedAt,
     }, completion.cache)
     if (cacheDiagnosis?.broken) this.publishCacheDiagnostic(cacheDiagnosis)
+    const thinkingEndedAt = Date.now()
     this.emit(interrupted ? { type: 'stream:end', interrupted: true } : { type: 'stream:end' })
     const effort = request.reasoning?.reasoningEffort ?? request.reasoning?.outputConfig?.effort
     return this.createAssistantTurn(text, toolCalls.map(call => this.decodeModelToolCall(call)), {
@@ -2674,7 +2678,8 @@ Before retrying:
       ...(interrupted ? { interrupted: true } : {}),
       reasoningEnabled: request.reasoning?.enabled, reasoningEffort: effort,
       thinking: reasoning ? { content: reasoning, source: 'provider', status: interrupted ? 'interrupted' : 'complete',
-        durationMs: Date.now() - startTime, tokenCount: completion.reasoningTokenCount, effort } : undefined,
+        ...(thinkingStartedAt !== undefined ? { startedAt: thinkingStartedAt, durationMs: Math.max(0, thinkingEndedAt - thinkingStartedAt) } : {}),
+        tokenCount: completion.reasoningTokenCount, effort } : undefined,
       rawReasoningPayload: completion.rawReasoningPayload,
     })
   }
@@ -4038,7 +4043,7 @@ Support claims with inspected source text. Use known paths directly, or locate c
       }
       case 'recall': {
         if (!this.toolExecutor.memoryRecall) return toolFailure('Continuum recall is unavailable', 'environment', 'none')
-        const depth = args.depth === 'topic' || args.depth === 'deep' || args.depth === 'exact' ? args.depth : 'recent'
+        const depth = args.depth === 'topic' || args.depth === 'deep' ? args.depth : 'recent'
         const response = await this.toolExecutor.memoryRecall({ depth, query: typeof args.query === 'string' ? args.query : undefined,
           entity: typeof args.entity === 'string' ? args.entity : undefined, date: typeof args.date === 'string' ? args.date : undefined,
           limit: typeof args.limit === 'number' ? args.limit : undefined })
@@ -4706,8 +4711,10 @@ Support claims with inspected source text. Use known paths directly, or locate c
     model: APIModel | null,
     startTime: number,
     interruption?: AgentRunInterruption,
+    thinkingStartedAt?: number,
   ): AgentTurn | null {
     const visibleText = stripTextToolCallMarkup(textContent, { stripIncomplete: true })
+    const thinkingEndedAt = Date.now()
     this.emit({ type: 'stream:end', interrupted: true })
     if (!visibleText && !reasoningContent.trim()) return null
     return this.createAssistantTurn(visibleText, undefined, {
@@ -4720,7 +4727,7 @@ Support claims with inspected source text. Use known paths directly, or locate c
         content: reasoningContent,
         source: 'provider',
         status: 'interrupted',
-        durationMs: Date.now() - startTime,
+        ...(thinkingStartedAt !== undefined ? { startedAt: thinkingStartedAt, durationMs: Math.max(0, thinkingEndedAt - thinkingStartedAt) } : {}),
         tokenCount: Math.max(1, Math.ceil(reasoningContent.length / 4)),
       } : undefined,
     })

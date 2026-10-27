@@ -1,5 +1,5 @@
 import { toolInvocationKey, toolResultCallStatus } from '@fluxos/contracts/toolResultData'
-import type { ToolCall, ToolResult } from '@fluxos/contracts/agentTypes'
+import type { ThinkingTrace, ToolCall, ToolResult } from '@fluxos/contracts/agentTypes'
 import type { AnyConversationEvent, ConversationRunOutcome, ConversationStepOutcome } from '@fluxos/contracts/conversationEvent'
 import { ToolProjectionIndex, newToolProjectionKey } from './toolProjectionIdentity'
 
@@ -194,7 +194,9 @@ export class WorkProjectionEngine {
         const status: WorkNodeStatus = turn.metadata?.interrupted ? 'interrupted' : 'completed'
         let changed = false
         for (const kind of ['reasoning', 'answer'] as const) {
-          changed = this.updateNode(`${responseId}:${kind}`, event, { status, turnId: turn.id, settled: true }) || changed
+          const key = `${responseId}:${kind}`
+          changed = this.updateNode(key, event, { status, turnId: turn.id, settled: true }) || changed
+          if (kind === 'reasoning') this.applyReasoningTiming(key, turn.metadata?.thinking)
         }
         for (const toolCall of turn.toolCalls || []) {
           const response = event.stepId ? `step:${event.stepId}` : responseId
@@ -244,7 +246,9 @@ export class WorkProjectionEngine {
         const responseId = this.ensureResponse(event.runId, event.stepId, event.turnId)
         const existing = this.nodes[`${responseId}:${kind}`]
         const status = existing && terminal(existing.status) ? existing.status : 'completed'
-        return this.commitResponse(event, responseId, kind, event.payload.text, status, event.turnId, event.runId)
+        const changed = this.commitResponse(event, responseId, kind, event.payload.text, status, event.turnId, event.runId)
+        if (kind === 'reasoning') this.applyReasoningTiming(`${responseId}:${kind}`, event.payload)
+        return changed
       }
       case 'stream.ended':
         return this.updateNode(
@@ -377,6 +381,16 @@ export class WorkProjectionEngine {
       content,
       settled: true,
     })
+  }
+
+  private applyReasoningTiming(key: string, timing?: Pick<ThinkingTrace, 'startedAt' | 'durationMs'>): void {
+    const node = this.nodes[key]
+    if (!node || timing?.startedAt === undefined || !Number.isFinite(timing.startedAt) || timing.startedAt < 0) return
+    const end = timing.durationMs !== undefined && Number.isFinite(timing.durationMs) && timing.durationMs >= 0
+      ? timing.startedAt + timing.durationMs : undefined
+    this.nodes[key] = { ...node, startedAt: timing.startedAt,
+      ...(end !== undefined ? { updatedAt: end, completedAt: end } : {}),
+    }
   }
 
   private settleResponse(envelope: AnyConversationEvent, status: WorkNodeStatus, stepId?: string): boolean {

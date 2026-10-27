@@ -33,7 +33,7 @@ export interface ConversationEventPayloadMap {
   'step.completed': { index: number; outcome: ConversationStepOutcome; error?: string }
   'stream.started': { channel: ConversationStreamChannel }
   'stream.delta': { channel: ConversationStreamChannel; text: string }
-  'stream.committed': { channel: ConversationStreamChannel; text: string }
+  'stream.committed': { channel: ConversationStreamChannel; text: string; startedAt?: number; durationMs?: number }
   'stream.ended': { channel: ConversationStreamChannel; interrupted: boolean }
   'tool.delta': { toolCallId: string; toolName: string; partialJson: string }
   'tool.proposed': { toolCall: ToolCall }

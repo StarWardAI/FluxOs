@@ -109,6 +109,8 @@ function validItemPayload(kind: string, value: unknown): boolean {
     case 'user_message': return typeof payload.text === 'string' && stringArray(payload.attachmentIds)
     case 'assistant_message': return typeof payload.text === 'string' && (payload.citations === undefined || stringArray(payload.citations))
     case 'reasoning': return typeof payload.omitted === 'boolean' && optionalString(payload.text) && optionalString(payload.summary)
+      && optionalNumber(payload.startedAt) && (payload.startedAt === undefined || Number(payload.startedAt) >= 0)
+      && optionalNumber(payload.durationMs) && (payload.durationMs === undefined || Number(payload.durationMs) >= 0)
     case 'tool_call': return typeof payload.toolCallId === 'string' && typeof payload.toolName === 'string'
       && Boolean(objectRecord(payload.arguments)) && optionalPortablePaths(payload.pathRefs)
       && (payload.requiresReview === undefined || typeof payload.requiresReview === 'boolean')

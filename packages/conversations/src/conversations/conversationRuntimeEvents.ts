@@ -309,8 +309,12 @@ export function planConversationRuntimeEvents(
         kind: 'reasoning',
         status: turn.metadata.interrupted ? 'interrupted' : 'completed',
         createdAt: turn.metadata.thinking.startedAt ?? turn.timestamp,
-        updatedAt: turn.timestamp,
-        payload: { text: turn.metadata.thinking.content, omitted: false },
+        updatedAt: turn.metadata.thinking.startedAt !== undefined && turn.metadata.thinking.durationMs !== undefined
+          ? turn.metadata.thinking.startedAt + turn.metadata.thinking.durationMs : turn.timestamp,
+        payload: { text: turn.metadata.thinking.content, omitted: false,
+          ...(turn.metadata.thinking.startedAt !== undefined ? { startedAt: turn.metadata.thinking.startedAt } : {}),
+          ...(turn.metadata.thinking.durationMs !== undefined ? { durationMs: turn.metadata.thinking.durationMs } : {}),
+        },
       }
       events.push({ eventId: stableId('projection', conversation.id, item.id, 'created'), profileId, conversationId: conversation.id, workspaceId, runId, turnId, itemId: item.id, source, provenance, type: 'item.created', at: item.createdAt, payload: { item } })
       activityIds.add(item.id)

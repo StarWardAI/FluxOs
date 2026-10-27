@@ -105,7 +105,7 @@ interface ConversationItemBase<Kind extends string, Payload> {
 export type ConversationItemV2 =
   | ConversationItemBase<'user_message', { text: string; attachmentIds: string[] }>
   | ConversationItemBase<'assistant_message', { text: string; citations?: string[] }>
-  | ConversationItemBase<'reasoning', { text?: string; omitted: boolean; summary?: string }>
+  | ConversationItemBase<'reasoning', { text?: string; omitted: boolean; summary?: string; startedAt?: number; durationMs?: number }>
   | ConversationItemBase<'tool_call', { toolCallId: string; toolName: string; arguments: Record<string, unknown>; modelInvocation?: ToolCall['modelInvocation']; operationIdentity?: ToolCall['operationIdentity']; pathRefs?: PortablePathRef[]; requiresReview?: boolean }>
   | ConversationItemBase<'tool_result', { toolCallId: string; toolName: string; output: string; isError: boolean; pathRefs?: PortablePathRef[] } & Pick<ToolResult, 'retrieval' | 'data' | 'errorKind' | 'recovery' | 'interruption' | 'changeSummary' | 'attachments' | 'outputSource' | 'operation' | 'operationIdentity'>>
   | ConversationItemBase<'approval', { requestId: string; requestKind: 'permission' | 'input'; question: string; decision?: string; policy?: ApprovalPolicy }>

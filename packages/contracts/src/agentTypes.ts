@@ -249,10 +249,9 @@ export interface ThinkingTrace {
   hadAlternatives?: boolean
   hasToolBackedVerification?: boolean
   /**
-   * Wall-clock milliseconds the model spent emitting reasoning content for
-   * this turn. Populated when the stream finalizes; surfaced in the collapsed
-   * digest as e.g. "Thought for 4.2s" so users can audit reasoning cost
-   * without expanding the trace.
+   * Wall-clock interval from the first reasoning chunk to this turn's stream
+   * finalization. Excludes the wait before reasoning arrives. Missing means
+   * unmeasured; zero is a measured interval. Persisted with startedAt.
    */
   durationMs?: number
 }

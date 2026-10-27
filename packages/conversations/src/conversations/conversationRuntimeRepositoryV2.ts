@@ -129,6 +129,14 @@ function semanticToolItem(
 
 function turnFromProjection(turn: ConversationTurnV2, items: ConversationItemV2[]): AgentTurn {
   const message = items.find(item => item.kind === (turn.role === 'assistant' ? 'assistant_message' : 'user_message'))
+  const reasoning = items.find(item => item.kind === 'reasoning')
+  const thinking = reasoning?.kind === 'reasoning' && reasoning.payload.text ? {
+    content: reasoning.payload.text,
+    source: 'provider' as const,
+    status: turn.status === 'interrupted' || reasoning.status === 'interrupted' ? 'interrupted' as const : 'complete' as const,
+    ...(reasoning.payload.startedAt !== undefined ? { startedAt: reasoning.payload.startedAt } : {}),
+    ...(reasoning.payload.durationMs !== undefined ? { durationMs: reasoning.payload.durationMs } : {}),
+  } : undefined
   const toolCalls = items.filter(item => item.kind === 'tool_call').map(item => {
     const payload = item.payload as Extract<ConversationItemV2, { kind: 'tool_call' }>['payload']
     return { id: payload.toolCallId, name: payload.toolName, arguments: structuredClone(payload.arguments),
@@ -147,8 +155,9 @@ function turnFromProjection(turn: ConversationTurnV2, items: ConversationItemV2[
     timestamp: turn.createdAt,
     ...(toolCalls.length ? { toolCalls } : {}),
     ...(toolResults.length ? { toolResults } : {}),
-    ...((turn.status === 'interrupted' || turn.runId || turn.metadata) ? { metadata: {
+    ...((turn.status === 'interrupted' || turn.runId || turn.metadata || thinking) ? { metadata: {
       ...structuredClone(turn.metadata),
+      ...(thinking ? { thinking } : {}),
       ...(turn.status === 'interrupted' ? { interrupted: true } : {}),
       ...(turn.runId ? { workRunId: turn.runId } : {}),
     } } : {}),
@@ -410,7 +419,10 @@ function canonicalEventsFromProjectionV2(projection: ConversationTranscriptProje
       itemId: item.id,
     }
     if (item.kind === 'reasoning' && item.payload.text) {
-      add({ ...common, key: `item:${item.id}:reasoning`, type: 'stream.committed', payload: { channel: 'thinking', text: item.payload.text } })
+      add({ ...common, at: item.updatedAt, key: `item:${item.id}:reasoning`, type: 'stream.committed', payload: { channel: 'thinking', text: item.payload.text,
+        ...(item.payload.startedAt !== undefined ? { startedAt: item.payload.startedAt } : {}),
+        ...(item.payload.durationMs !== undefined ? { durationMs: item.payload.durationMs } : {}),
+      } })
     } else if (item.kind === 'assistant_message' && item.payload.text) {
       add({ ...common, key: `item:${item.id}:answer`, type: 'stream.committed', payload: { channel: 'answer', text: item.payload.text } })
     } else if (item.kind === 'tool_call') {
@@ -864,7 +876,15 @@ export class ConversationRuntimeRepositoryV2 {
       case 'stream.committed':
         if (event.payload.channel === 'thinking' && event.payload.text) {
           const id = event.itemId ? scopedId('reasoning', event.itemId) : canonicalEventId(event, 'reasoning')
-          const item: ConversationItemV2 = { schemaVersion: 1, id, conversationId: conversation.id, runId: common.runId, turnId: common.turnId, kind: 'reasoning', status: 'completed', createdAt: event.at, updatedAt: event.at, payload: { text: event.payload.text, omitted: false } }
+          const { startedAt, durationMs } = event.payload
+          const item: ConversationItemV2 = { schemaVersion: 1, id, conversationId: conversation.id, runId: common.runId, turnId: common.turnId, kind: 'reasoning', status: 'completed',
+            createdAt: startedAt ?? event.at,
+            updatedAt: startedAt !== undefined && durationMs !== undefined ? startedAt + durationMs : event.at,
+            payload: { text: event.payload.text, omitted: false,
+              ...(startedAt !== undefined ? { startedAt } : {}),
+              ...(durationMs !== undefined ? { durationMs } : {}),
+            },
+          }
           inputs.push({ ...common, eventId: canonicalEventId(event), itemId: id, type: 'item.created', payload: { item } })
         }
         break
