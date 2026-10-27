@@ -33,12 +33,13 @@ describe('model invocation in canonical conversations', () => {
   it.each([
     ['snapshot', 'invalid_json'], ['snapshot', 'extra_field'],
     ['canonical', 'invalid_json'], ['canonical', 'extra_field'],
+    ['snapshot', 'whitespace_target'], ['canonical', 'whitespace_target'],
   ] as const)('does not persist rejected computer gateway input through %s with %s', (mode, malformed) => {
     const root = mkdtempSync(join(tmpdir(), 'fluxagent-malformed-gateway-privacy-'))
     try {
       const secret = 'PRIVATE_REJECTED_COMPUTER_INPUT'
       const gateway: ToolCall = { id: 'computer-call', name: 'call_tool', arguments: {
-        name: 'computer__type_text', arguments_json: malformed === 'invalid_json'
+        name: malformed === 'whitespace_target' ? ' computer__type_text ' : 'computer__type_text', arguments_json: malformed === 'invalid_json'
           ? ` { "text": "${secret}"` : ` { "text": "${secret}" } `,
         ...(malformed === 'extra_field' ? { unexpected: secret } : {}),
       } }

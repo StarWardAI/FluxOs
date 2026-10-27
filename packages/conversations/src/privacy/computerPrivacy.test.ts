@@ -76,12 +76,19 @@ describe('computer privacy projection', () => {
     { label: 'extra gateway fields', name: 'call_tool', arguments: {
       name: 'computer__type_text', arguments_json: '{"text":"PRIVATE_TYPED_TEXT"}', unexpected: 'PRIVATE_KEYS',
     } },
+    { label: 'whitespace-padded gateway target', name: 'call_tool', arguments: {
+      name: ' computer__type_text ', arguments_json: '{"text":"PRIVATE_TYPED_TEXT"}',
+    } },
     { label: 'original gateway identity', name: 'read_file', arguments: { text: 'PRIVATE_TYPED_TEXT' },
       modelInvocation: { name: 'call_tool', arguments: {
         name: 'computer__type_text', arguments_json: '{"text":"PRIVATE_TYPED_TEXT"',
       } } },
     { label: 'original computer identity', name: 'read_file', arguments: { text: 'PRIVATE_TYPED_TEXT' },
       modelInvocation: { name: 'computer__type_text', arguments: { text: 'PRIVATE_TYPED_TEXT' } } },
+    { label: 'whitespace-padded original gateway target', name: 'read_file', arguments: { text: 'PRIVATE_TYPED_TEXT' },
+      modelInvocation: { name: 'call_tool', arguments: {
+        name: ' computer__type_text ', arguments_json: '{"text":"PRIVATE_TYPED_TEXT"}',
+      } } },
   ])('classifies and redacts $label before successful gateway decoding', invocation => {
     const { label: _label, ...input } = invocation
     const call: ToolCall = { id: 'computer-call', ...input }

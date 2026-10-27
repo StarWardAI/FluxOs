@@ -13,8 +13,10 @@ function computerResultMessage(result: Pick<ToolResult, 'isError'>): string {
 
 function invocationContainsComputerInput(invocation: ToolCall['modelInvocation']): boolean {
   if (!invocation) return false
-  return isBuiltInComputerTool(invocation.name)
-    || invocation.name === 'call_tool' && isBuiltInComputerTool(invocation.arguments?.name)
+  // Rejected target spellings can still contain private input; this normalization never authorizes execution.
+  const isComputerCandidate = (name: unknown): boolean => isBuiltInComputerTool(typeof name === 'string' ? name.trim() : name)
+  return isComputerCandidate(invocation.name)
+    || invocation.name === 'call_tool' && isComputerCandidate(invocation.arguments?.name)
 }
 
 function isComputerToolCall(toolCall: ToolCall): boolean {
