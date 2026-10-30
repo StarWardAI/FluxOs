@@ -1,6 +1,6 @@
 # FluxOs package architecture
 
-FluxOs is the independent MIT kernel. Its nine public packages use `@fluxos/*` declared exports. The sibling private FluxAgent product owns workbench assembly, DOM rendering, remote control, Electron and native adapters; no core package depends on a private product package. The assistant's public name is FluxAgent.
+FluxOs is the independent MIT kernel. Its nine public packages use `@fluxos/*` declared exports. The sibling Apache-2.0 FluxAgent product owns workbench assembly, DOM rendering, remote control, Electron and native adapters; no core package depends on a product package. The assistant's public name is FluxAgent.
 
 ## Ownership
 
@@ -44,6 +44,6 @@ The conversation layer normalizes and durably commits canonical facts before adv
 
 The root and nine public manifests currently use `1.0.1`; package versions describe APIs, while a consumer's pinned Git revision describes its source baseline. A dirty working tree can build different code at the same HEAD and version. Record HEAD, dirty state and source/build digests with validation; package metadata alone is not release provenance.
 
-Run `npm ci`, `npm run verify`, `npm run build`, `npm run type-check`, `npm test` from the core repository. Build cleans package output, so do not run it concurrently with tests that consume `dist`. `npm run pack:core` verifies dry-run packaging. Kernel tests and compiled API checks do not certify a private desktop installation or real external services.
+Run `npm ci`, `npm run verify`, `npm run build`, `npm run type-check`, `npm test` from the core repository. Build cleans package output, so do not run it concurrently with tests that consume `dist`. `npm run pack:core` verifies dry-run packaging. Kernel tests and compiled API checks do not certify a desktop product installation or real external services.
 
-Before product launch, update current APIs, data and fixtures directly; do not add development-era aliases, fallback readers, dual writes, compatibility facades or runtime migrations. The public repository can be cloned, documented, built and checked without private product source. See the [repository README](../../README.md) and [contribution policy](../../CONTRIBUTING.md).
+Before product launch, update current APIs, data and fixtures directly; do not add development-era aliases, fallback readers, dual writes, compatibility facades or runtime migrations. The kernel repository can be cloned, documented, built and checked without product source. See the [repository README](../../README.md) and [contribution policy](../../CONTRIBUTING.md).
