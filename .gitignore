@@ -6,3 +6,6 @@ coverage/
 *.log
 
 .fluxagent/
+
+# Local runtime logs
+.turboflux/
