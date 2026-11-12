@@ -23,7 +23,8 @@ export class ModelStreamControl {
   abortActive(abort: (streamId: number) => void | Promise<void>): boolean {
     const streamId = this.activeStream?.id
     if (streamId === undefined) return false
-    void Promise.resolve(abort(streamId)).catch(() => {})
+    // Transport cleanup must not prevent the rest of the run's cancellation tree.
+    try { void Promise.resolve(abort(streamId)).catch(() => {}) } catch {}
     return true
   }
 

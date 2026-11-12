@@ -49,6 +49,20 @@ describe('ApprovalCoordinator', () => {
     await expect(coordinator.request({ id: 'sync' }, { cancelDecision: 'deny' })).resolves.toBe('allow-session')
   })
 
+  it('cancels a batch without presenting requests that are about to be cancelled', async () => {
+    const present = vi.fn()
+    const coordinator = new ApprovalCoordinator<{ id: string }, string>(present)
+    const permission = coordinator.request({ id: 'permission' }, { cancelDecision: 'deny' })
+    const workflow = coordinator.request({ id: 'workflow' }, { cancelDecision: 'cancelled' })
+
+    expect(coordinator.cancelAll()).toBe(2)
+
+    await expect(permission).resolves.toBe('deny')
+    await expect(workflow).resolves.toBe('cancelled')
+    expect(present).toHaveBeenCalledTimes(1)
+    expect(coordinator.getSnapshot()).toEqual({ active: null, queued: [], pendingCount: 0 })
+  })
+
   it('publishes requested and terminal lifecycle records in settlement order', async () => {
     const lifecycle: Array<{ id: string; state: string; decision?: string }> = []
     const coordinator = new ApprovalCoordinator<{ id: string }, string>(

@@ -6,6 +6,23 @@ import type { ToolCall, ToolResult } from '@fluxos/contracts/agentTypes'
 import type { ToolExecutor } from '@fluxos/contracts/toolExecutor'
 
 describe('AgentEngine concurrent approval requests', () => {
+  it.each(['abort', 'destroy'] as const)('preserves workflow cancellation on %s', async action => {
+    const workspace = process.cwd()
+    const stateProvider = new DefaultAgentStateProvider({ provider: 'custom', apiKey: 'test', baseUrl: 'http://example.test',
+      model: 'test-model', contextWindow: 100_000, maxTokens: 4096 }, workspace)
+    const engine = new AgentEngine({ mode: 'vibe', approvalPolicy: 'ask', workspacePath: workspace }, {} as ToolExecutor, stateProvider)
+    const pending = engine.requestWorkflowSurface({ requestId: 'workflow', question: 'Choose a direction',
+      ui: { workflow: 'fixture', stage: 'direction', choices: [{ id: 'first', label: 'First' }] } })
+
+    try {
+      engine[action]()
+      await expect(pending).resolves.toBe('cancelled')
+      expect(engine.getPendingInteractiveRequests().pendingCount).toBe(0)
+    } finally {
+      engine.destroy()
+    }
+  })
+
   it('serializes two concurrency-safe MCP approvals without losing a resolver', async () => {
     const workspace = process.cwd()
     const stateProvider = new DefaultAgentStateProvider({

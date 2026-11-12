@@ -34,6 +34,7 @@ export class ApprovalCoordinator<Request extends ApprovalRequestIdentity, Decisi
   private readonly pending = new Map<string, PendingApproval<Request, Decision>>()
   private readonly order: string[] = []
   private activeId: string | null = null
+  private cancellationDepth = 0
 
   constructor(
     private readonly present: (request: Request, queuedCount: number) => void,
@@ -91,9 +92,15 @@ export class ApprovalCoordinator<Request extends ApprovalRequestIdentity, Decisi
   cancelAll(decision?: Decision): number {
     const requestIds = [...this.order]
     let cancelled = 0
-    for (const requestId of requestIds) {
-      const entry = this.pending.get(requestId)
-      if (entry && this.cancel(requestId, decision ?? entry.cancelDecision)) cancelled += 1
+    this.cancellationDepth += 1
+    try {
+      for (const requestId of requestIds) {
+        const entry = this.pending.get(requestId)
+        if (entry && this.cancel(requestId, decision ?? entry.cancelDecision)) cancelled += 1
+      }
+    } finally {
+      this.cancellationDepth -= 1
+      this.presentNext()
     }
     return cancelled
   }
@@ -132,7 +139,7 @@ export class ApprovalCoordinator<Request extends ApprovalRequestIdentity, Decisi
   }
 
   private presentNext(): void {
-    if (this.activeId !== null) return
+    if (this.activeId !== null || this.cancellationDepth > 0) return
     const nextId = this.order.find(requestId => this.pending.has(requestId))
     if (!nextId) return
     this.activeId = nextId

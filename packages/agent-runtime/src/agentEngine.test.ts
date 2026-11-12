@@ -3433,6 +3433,28 @@ describe('AgentEngine model protocol compatibility', () => {
     }
   })
 
+  it('reports a 429 at once when Retry-After exceeds the retry budget', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    // The executor caps Retry-After at 120s, so a five-hour quota window arrives as the full budget.
+    const harness = createProtocolHarness('anthropic', 'claude-fable-5', async () => {
+      calls += 1
+      return { success: false, status: 429, retryAfterMs: 120_000, error: 'HTTP 429: quota window exhausted' }
+    })
+
+    try {
+      const pending = harness.callModel()
+      await vi.advanceTimersByTimeAsync(0)
+      const turn = await pending
+      expect(turn.content).toContain('quota window exhausted')
+      expect(calls).toBe(1)
+      expect(harness.events.filter(event => event.type === 'notification' && event.level === 'warning')).toHaveLength(0)
+    } finally {
+      harness.engine.destroy()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not replay a 429 after stream bytes have arrived', async () => {
     let calls = 0
     const harness = createProtocolHarness('anthropic', 'claude-fable-5', async (_url, _headers, _body, onLine) => {

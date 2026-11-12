@@ -91,6 +91,42 @@ describe('AgentRunLifecycle', () => {
     expect(lifecycle.submitSteering('after completion')).toBe(false)
   })
 
+  it('keeps uncommitted guidance available for rejection when a transcript commit fails', async () => {
+    const { lifecycle, inputs } = createLifecycle()
+    const run = lifecycle.run(async () => 'done')
+    for (const id of ['first', 'failed', 'last']) lifecycle.submitSteering(id, id)
+    const committed: string[] = []
+
+    expect(() => lifecycle.consumeSteering(input => {
+      if (input.id === 'failed') throw new Error('journal unavailable')
+      committed.push(input.id)
+    })).toThrow('journal unavailable')
+    lifecycle.closeSteering('Transcript commit failed')
+    await run
+
+    expect(committed).toEqual(['first'])
+    expect(inputs).toEqual(['first:accepted', 'failed:accepted', 'last:accepted',
+      'first:committed', 'failed:rejected', 'last:rejected'])
+  })
+
+  it('does not reject already committed guidance when its notification fails', async () => {
+    const inputs: string[] = []
+    const lifecycle = new AgentRunLifecycle<string>({ onStateChanged: () => {}, onStateFallback: () => {},
+      onNotification: () => {}, onInputState: (input, state) => {
+        inputs.push(`${input.id}:${state}`)
+        if (state === 'committed') throw new Error('observer failed')
+      } })
+    const run = lifecycle.run(async () => 'done')
+    lifecycle.submitSteering('First', 'first')
+    lifecycle.submitSteering('Last', 'last')
+
+    expect(() => lifecycle.consumeSteering(() => {})).toThrow('observer failed')
+    lifecycle.closeSteering('Run failed')
+    await run
+
+    expect(inputs).toEqual(['first:accepted', 'last:accepted', 'first:committed', 'last:rejected'])
+  })
+
   it.each(['completed', 'recoverable_error'] as const)('preserves %s while the run is finishing', async phase => {
     const { lifecycle } = createLifecycle()
     const run = lifecycle.run(async () => 'done')

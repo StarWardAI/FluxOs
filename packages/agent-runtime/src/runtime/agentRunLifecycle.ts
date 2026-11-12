@@ -162,9 +162,13 @@ export class AgentRunLifecycle<TRunResult = unknown> {
 
   consumeSteering(commit: (input: PendingSteeringInput) => void): boolean {
     if (this.pendingSteeringMessages.length === 0) return false
-    const messages = this.pendingSteeringMessages.splice(0)
+    // Keep uncommitted inputs owned by the run if a durable transcript append fails.
+    const messages = this.pendingSteeringMessages.slice()
     for (const message of messages) {
+      if (!this.pendingSteeringMessages.includes(message)) continue
       commit(message)
+      const index = this.pendingSteeringMessages.indexOf(message)
+      if (index >= 0) this.pendingSteeringMessages.splice(index, 1)
       this.options.onInputState(message, 'committed')
     }
     return true

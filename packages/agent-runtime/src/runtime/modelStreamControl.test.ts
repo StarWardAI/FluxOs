@@ -53,4 +53,15 @@ describe('ModelStreamControl', () => {
     release?.()
     await operation
   })
+
+  it('contains a synchronous transport abort failure so run cancellation can continue', async () => {
+    const control = new ModelStreamControl(() => 10)
+    let release!: () => void
+    const operation = control.run(undefined, () => new Promise<void>(resolve => { release = resolve }))
+
+    expect(() => control.abortActive(() => { throw new Error('transport already closed') })).not.toThrow()
+    release()
+    await operation
+    expect(control.getSnapshot().active).toBe(false)
+  })
 })

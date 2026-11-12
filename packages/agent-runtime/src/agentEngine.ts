@@ -689,7 +689,7 @@ export class AgentEngine {
       () => this.unsubscribeTaskManager?.(),
       () => this.runLifecycle.destroy(),
       () => this.contextCoordinator.destroy(),
-      () => this.interactiveRequests.cancelAll('deny'),
+      () => this.interactiveRequests.cancelAll(),
       () => this.resolvedAskUserResponses.clear(),
       () => this.modelStreams.clear(),
       () => this.toolOutputStore.clear(),
@@ -1281,7 +1281,7 @@ export class AgentEngine {
       }
       this.agentBackgroundSessions.clear()
       this.modelStreams.abortActive(streamId => this.toolExecutor.streamAbort?.(streamId))
-      this.interactiveRequests.cancelAll('deny')
+      this.interactiveRequests.cancelAll()
       this.resolvedAskUserResponses.clear()
     })
   }
@@ -2251,6 +2251,10 @@ Before retrying:
       MODEL_TRANSIENT_RETRYABLE_STATUSES.has(error.status)
       || (error.status >= 500 && error.status <= 599)
     )
+    // A provider that asks to wait longer than the remaining budget (a quota window, for example)
+    // will refuse every retry the budget allows; report it now instead of waiting it out.
+    const remainingBudgetMs = MODEL_TRANSIENT_RETRY_BUDGET_MS - (Date.now() - retryStartedAt)
+    if (error.retryAfterMs !== undefined && error.retryAfterMs >= remainingBudgetMs) return false
     return transientStatus && this.providerTransientRetryAttempt < MODEL_TRANSIENT_RETRY_DELAYS_MS.length
   }
 
